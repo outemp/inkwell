@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' https: data:;">
+  <title>Inkwell</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="drag-region"></div>
+
+  <div id="error-banner" class="error-banner hidden">
+    <span id="error-message"></span>
+    <button id="error-dismiss" class="error-dismiss">&times;</button>
+  </div>
+
+  <main id="content">
+    <div class="welcome">
+      <h1>Inkwell</h1>
+      <p>Open a Markdown file to get started</p>
+      <p class="hint">Double-click a .md file or drag it here</p>
+    </div>
+  </main>
+
+  <script src="renderer.js"></script>
+</body>
+</html>
