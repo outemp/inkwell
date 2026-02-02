@@ -30,6 +30,10 @@ let viewMode = 'rendered'; // 'rendered' | 'source' | 'split'
 let isDirty = false;
 let currentTheme = 'light';
 let tocVisible = false;
+let zenMode = false;
+let syncScrollEnabled = true;
+let autoSaveTimer = null;
+const AUTO_SAVE_DELAY = 30000; // 30 seconds of inactivity
 
 // Show error banner
 function showError(message) {
@@ -176,16 +180,43 @@ function renderSource(raw) {
   textarea.value = raw;
   textarea.spellcheck = false;
 
-  // Track changes for dirty state
+  // Track changes for dirty state and update status bar
   textarea.addEventListener('input', () => {
     if (!isDirty) {
       setDirty(true);
     }
+    // Update currentRaw to reflect changes for status bar
+    currentRaw = textarea.value;
+    // Schedule auto-save
+    scheduleAutoSave();
+    // Update status bar with new word/char counts
+    updateStatusBar();
   });
 
   contentEl.innerHTML = '';
   contentEl.appendChild(textarea);
   clearSearch();
+}
+
+// Schedule auto-save after period of inactivity
+function scheduleAutoSave() {
+  if (autoSaveTimer) {
+    clearTimeout(autoSaveTimer);
+  }
+
+  autoSaveTimer = setTimeout(async () => {
+    if (isDirty && currentFilePath && (viewMode === 'source' || viewMode === 'split')) {
+      await saveCurrentContent();
+    }
+  }, AUTO_SAVE_DELAY);
+}
+
+// Cancel auto-save timer
+function cancelAutoSave() {
+  if (autoSaveTimer) {
+    clearTimeout(autoSaveTimer);
+    autoSaveTimer = null;
+  }
 }
 
 // Update document title with dirty indicator
@@ -200,6 +231,11 @@ function setDirty(dirty) {
   isDirty = dirty;
   window.inkwell.setDirty(dirty);
   updateTitle();
+
+  // Cancel auto-save if file was saved
+  if (!dirty) {
+    cancelAutoSave();
+  }
 }
 
 // Update body classes based on view mode
@@ -210,6 +246,11 @@ function updateViewModeClasses() {
 
 // Render current view based on mode
 function renderCurrentView() {
+  // Clean up divider handlers when leaving split view
+  if (viewMode !== 'split') {
+    cleanupDividerHandlers();
+  }
+
   updateViewModeClasses();
   if (viewMode === 'source') {
     renderSource(currentRaw);
@@ -274,7 +315,7 @@ function renderSplitView() {
   const splitContainer = document.createElement('div');
   splitContainer.className = 'split-container';
 
-  // Source pane
+  // Source pane (left side)
   const sourcePane = document.createElement('div');
   sourcePane.className = 'split-pane split-source';
   const textarea = document.createElement('textarea');
@@ -288,9 +329,10 @@ function renderSplitView() {
   const divider = document.createElement('div');
   divider.className = 'split-divider';
 
-  // Preview pane
+  // Preview pane (right side)
   const previewPane = document.createElement('div');
   previewPane.className = 'split-pane split-preview';
+  previewPane.id = 'split-preview';
   previewPane.innerHTML = `<article class="markdown-body">${currentHtml}</article>`;
 
   splitContainer.appendChild(sourcePane);
@@ -300,6 +342,9 @@ function renderSplitView() {
   contentEl.innerHTML = '';
   contentEl.appendChild(splitContainer);
 
+  // Set up sync scroll between source and preview
+  setupSyncScroll(textarea, previewPane);
+
   // Set up live preview with debounce (500ms for better performance on large docs)
   let previewDebounce = null;
   let isUpdatingPreview = false;
@@ -308,6 +353,10 @@ function renderSplitView() {
     if (!isDirty) {
       setDirty(true);
     }
+
+    // Schedule auto-save
+    scheduleAutoSave();
+
     if (previewDebounce) clearTimeout(previewDebounce);
 
     // Show updating indicator for large content
@@ -320,10 +369,17 @@ function renderSplitView() {
       const editedContent = textarea.value;
       currentRaw = editedContent;
 
+      // Preserve scroll position during update
+      const savedScrollTop = previewPane.scrollTop;
+
       try {
         currentHtml = await window.inkwell.parseMarkdown(editedContent);
         previewPane.innerHTML = `<article class="markdown-body">${currentHtml}</article>`;
         previewPane.style.opacity = '';
+
+        // Restore scroll position
+        previewPane.scrollTop = savedScrollTop;
+
         setupExternalLinks(previewPane);
 
         // Render mermaid in preview pane (only if there are mermaid blocks)
@@ -336,9 +392,9 @@ function renderSplitView() {
         // Rebuild TOC using requestIdleCallback if available (non-blocking)
         if (tocVisible) {
           if (window.requestIdleCallback) {
-            requestIdleCallback(() => buildToc(), { timeout: 1000 });
+            requestIdleCallback(() => buildTocFromSplitPreview(), { timeout: 1000 });
           } else {
-            buildToc();
+            buildTocFromSplitPreview();
           }
         }
       } finally {
@@ -354,7 +410,136 @@ function renderSplitView() {
   // Setup external links in preview
   setupExternalLinks(previewPane);
 
+  // Build TOC from preview pane in split mode
+  if (tocVisible) {
+    buildTocFromSplitPreview();
+  }
+
+  // Render mermaid in initial preview
+  renderMermaidInContainer(previewPane);
+
   clearSearch();
+}
+
+// Build TOC from split preview pane
+function buildTocFromSplitPreview() {
+  if (!tocNav) return;
+
+  const previewPane = document.getElementById('split-preview');
+  const markdownBody = previewPane ? previewPane.querySelector('.markdown-body') : null;
+
+  if (!markdownBody) {
+    tocNav.innerHTML = '<ul class="toc-list"><li class="toc-empty">No headings found</li></ul>';
+    return;
+  }
+
+  const headings = markdownBody.querySelectorAll('h1, h2, h3, h4, h5, h6');
+  if (headings.length === 0) {
+    tocNav.innerHTML = '<ul class="toc-list"><li class="toc-empty">No headings found</li></ul>';
+    return;
+  }
+
+  const ul = document.createElement('ul');
+  ul.className = 'toc-list';
+
+  headings.forEach((heading, index) => {
+    if (!heading.id) {
+      heading.id = `heading-${index}`;
+    }
+
+    const li = document.createElement('li');
+    const a = document.createElement('a');
+    a.href = `#${heading.id}`;
+    a.textContent = heading.textContent;
+    a.className = `toc-${heading.tagName.toLowerCase()}`;
+    a.setAttribute('data-heading-id', heading.id);
+
+    a.addEventListener('click', (e) => {
+      e.preventDefault();
+      heading.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      tocNav.querySelectorAll('a').forEach(link => link.classList.remove('active'));
+      a.classList.add('active');
+    });
+
+    li.appendChild(a);
+    ul.appendChild(li);
+  });
+
+  tocNav.innerHTML = '';
+  tocNav.appendChild(ul);
+
+  // Set up scroll spy for preview pane
+  setupScrollSpyForPreview(headings, previewPane);
+}
+
+// Scroll spy for split view preview pane
+function setupScrollSpyForPreview(headings, previewPane) {
+  if (tocObserver) {
+    tocObserver.disconnect();
+  }
+
+  const options = {
+    root: previewPane,
+    rootMargin: '-80px 0px -70% 0px',
+    threshold: 0
+  };
+
+  tocObserver = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        const id = entry.target.id;
+        tocNav.querySelectorAll('a').forEach(link => {
+          link.classList.toggle('active', link.getAttribute('data-heading-id') === id);
+        });
+      }
+    });
+  }, options);
+
+  headings.forEach(heading => {
+    tocObserver.observe(heading);
+  });
+}
+
+// Set up synchronized scrolling between source and preview
+function setupSyncScroll(source, preview) {
+  let isSyncingFromSource = false;
+  let isSyncingFromPreview = false;
+
+  source.addEventListener('scroll', () => {
+    if (!syncScrollEnabled || isSyncingFromPreview) return;
+
+    // Guard against divide by zero when content fits viewport
+    const sourceScrollable = source.scrollHeight - source.clientHeight;
+    const previewScrollable = preview.scrollHeight - preview.clientHeight;
+    if (sourceScrollable <= 0 || previewScrollable <= 0) return;
+
+    isSyncingFromSource = true;
+    const scrollPercent = source.scrollTop / sourceScrollable;
+    const targetScroll = scrollPercent * previewScrollable;
+    preview.scrollTop = targetScroll;
+
+    requestAnimationFrame(() => {
+      isSyncingFromSource = false;
+    });
+  });
+
+  preview.addEventListener('scroll', () => {
+    if (!syncScrollEnabled || isSyncingFromSource) return;
+
+    // Guard against divide by zero when content fits viewport
+    const previewScrollable = preview.scrollHeight - preview.clientHeight;
+    const sourceScrollable = source.scrollHeight - source.clientHeight;
+    if (previewScrollable <= 0 || sourceScrollable <= 0) return;
+
+    isSyncingFromPreview = true;
+    const scrollPercent = preview.scrollTop / previewScrollable;
+    const targetScroll = scrollPercent * sourceScrollable;
+    source.scrollTop = targetScroll;
+
+    requestAnimationFrame(() => {
+      isSyncingFromPreview = false;
+    });
+  });
 }
 
 // Allowed URL schemes for external links
@@ -419,11 +604,18 @@ function setupExternalLinks(container) {
   });
 }
 
+// Track global handlers for cleanup
+let dividerMoveHandler = null;
+let dividerUpHandler = null;
+
 // Setup divider drag to resize panes
 function setupDividerResize(divider, leftPane, rightPane) {
   let isDragging = false;
   let startX = 0;
   let leftWidth = 0;
+
+  // Remove any existing global handlers first
+  cleanupDividerHandlers();
 
   divider.addEventListener('mousedown', (e) => {
     isDragging = true;
@@ -433,21 +625,36 @@ function setupDividerResize(divider, leftPane, rightPane) {
     document.body.style.userSelect = 'none';
   });
 
-  document.addEventListener('mousemove', (e) => {
+  dividerMoveHandler = (e) => {
     if (!isDragging) return;
     const delta = e.clientX - startX;
     const newWidth = Math.max(200, Math.min(leftWidth + delta, window.innerWidth - 250));
     leftPane.style.width = newWidth + 'px';
     leftPane.style.flex = 'none';
-  });
+  };
 
-  document.addEventListener('mouseup', () => {
+  dividerUpHandler = () => {
     if (isDragging) {
       isDragging = false;
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
     }
-  });
+  };
+
+  document.addEventListener('mousemove', dividerMoveHandler);
+  document.addEventListener('mouseup', dividerUpHandler);
+}
+
+// Cleanup divider handlers when leaving split view
+function cleanupDividerHandlers() {
+  if (dividerMoveHandler) {
+    document.removeEventListener('mousemove', dividerMoveHandler);
+    dividerMoveHandler = null;
+  }
+  if (dividerUpHandler) {
+    document.removeEventListener('mouseup', dividerUpHandler);
+    dividerUpHandler = null;
+  }
 }
 
 // Theme handling
@@ -472,11 +679,12 @@ window.inkwell.onTocVisibilityChanged(({ visible }) => {
 // Update TOC visibility
 function updateTocVisibility() {
   if (tocSidebar) {
-    const shouldHide = !tocVisible || viewMode === 'source' || viewMode === 'split';
+    // Hide TOC only in source mode (not in split view anymore)
+    const shouldHide = !tocVisible || viewMode === 'source';
     tocSidebar.classList.toggle('hidden', shouldHide);
   }
-  // Also update body class for layout adjustment
-  document.body.classList.toggle('toc-open', tocVisible && viewMode === 'rendered');
+  // Update body class for layout adjustment - now includes split mode
+  document.body.classList.toggle('toc-open', tocVisible && viewMode !== 'source');
 }
 
 // Build Table of Contents from headings
@@ -568,8 +776,33 @@ function toggleToc() {
   tocVisible = !tocVisible;
   window.inkwell.setTocVisible(tocVisible);
   updateTocVisibility();
-  if (tocVisible && viewMode === 'rendered') {
-    buildToc();
+  if (tocVisible) {
+    if (viewMode === 'split') {
+      buildTocFromSplitPreview();
+    } else if (viewMode === 'rendered') {
+      buildToc();
+    }
+  }
+}
+
+// Toggle Zen Mode
+function toggleZenMode() {
+  zenMode = !zenMode;
+  document.body.classList.toggle('zen-mode', zenMode);
+
+  // Hide/show various UI elements
+  if (zenMode) {
+    // Hide status bar and other distractions
+    statusBar.classList.add('hidden');
+    if (tocSidebar) tocSidebar.classList.add('zen-hidden');
+    searchBar.classList.add('hidden');
+    closeSearch();
+  } else {
+    // Restore status bar
+    if (currentRaw) statusBar.classList.remove('hidden');
+    if (tocSidebar && tocVisible && viewMode !== 'source') {
+      tocSidebar.classList.remove('zen-hidden');
+    }
   }
 }
 
@@ -1059,7 +1292,7 @@ document.addEventListener('keydown', (e) => {
 // ===== Status Bar =====
 
 function updateStatusBar() {
-  if (!currentRaw) {
+  if (!currentRaw || zenMode) {
     statusBar.classList.add('hidden');
     return;
   }
@@ -1074,8 +1307,25 @@ function updateStatusBar() {
   const charCount = currentRaw.length;
   const charCountNoSpaces = currentRaw.replace(/\s/g, '').length;
 
+  // Calculate reading time (average 200 words per minute)
+  const readingMinutes = Math.ceil(wordCount / 200);
+
   wordCountEl.textContent = `${wordCount} word${wordCount !== 1 ? 's' : ''}`;
   charCountEl.textContent = `${charCountNoSpaces} characters`;
+
+  // Update reading time
+  let readingTimeEl = document.getElementById('reading-time');
+  if (!readingTimeEl) {
+    const separator = document.createElement('span');
+    separator.className = 'status-separator';
+    separator.textContent = '|';
+    statusBar.appendChild(separator);
+
+    readingTimeEl = document.createElement('span');
+    readingTimeEl.id = 'reading-time';
+    statusBar.appendChild(readingTimeEl);
+  }
+  readingTimeEl.textContent = `${readingMinutes} min read`;
 }
 
 // ===== Shortcuts Overlay =====
@@ -1111,10 +1361,10 @@ window.inkwell.onShowShortcuts(() => {
 
 // ===== Export HTML =====
 
-window.inkwell.onExportHTML(async ({ filePath }) => {
-  // Generate standalone HTML
+window.inkwell.onExportHTML(async () => {
+  // Generate standalone HTML - path is managed by main process for security
   const htmlContent = generateExportHTML();
-  const result = await window.inkwell.saveHTMLExport(filePath, htmlContent);
+  const result = await window.inkwell.saveHTMLExport(htmlContent);
   if (result.error) {
     showError(result.error);
   }
@@ -1183,6 +1433,16 @@ window.inkwell.onToggleSplitView(() => {
   toggleSplitView();
 });
 
+// Listen for toggle-zen-mode from main process
+window.inkwell.onToggleZenMode(() => {
+  toggleZenMode();
+});
+
+// Listen for toggle-sync-scroll from main process
+window.inkwell.onToggleSyncScroll(() => {
+  syncScrollEnabled = !syncScrollEnabled;
+});
+
 // Initialize theme on load
 (async function init() {
   try {
@@ -1194,6 +1454,9 @@ window.inkwell.onToggleSplitView(() => {
       if (prefs.tocVisible !== undefined) {
         tocVisible = prefs.tocVisible;
         updateTocVisibility();
+      }
+      if (prefs.syncScrollEnabled !== undefined) {
+        syncScrollEnabled = prefs.syncScrollEnabled;
       }
     }
   } catch (err) {

@@ -131,7 +131,8 @@ const store = new Store({
     recentFiles: [],
     windowBounds: { width: 900, height: 700 },
     zoomLevel: 0,
-    tocVisible: false
+    tocVisible: false,
+    syncScrollEnabled: true
   }
 });
 
@@ -328,6 +329,9 @@ let fileWatcher = null;
 let debounceTimer = null;
 let viewMode = 'rendered'; // 'rendered' | 'source' | 'split'
 let isDirty = false;
+let pendingExportPath = null; // Track export path in main process for security
+let zenModeEnabled = false;
+let syncScrollEnabled = store.get('syncScrollEnabled', true); // Load persisted preference
 
 // Allowed file extensions
 const ALLOWED_EXTENSIONS = ['.md', '.markdown'];
@@ -509,7 +513,9 @@ async function exportToHTML() {
   });
 
   if (!result.canceled && result.filePath) {
-    mainWindow.webContents.send('export-html', { filePath: result.filePath });
+    // Store path in main process for security - renderer cannot override it
+    pendingExportPath = result.filePath;
+    mainWindow.webContents.send('export-html', {});
   }
 }
 
@@ -710,6 +716,35 @@ function createMenu() {
             if (mainWindow) {
               mainWindow.webContents.send('toggle-view-source');
             }
+          }
+        },
+        { type: 'separator' },
+        {
+          label: 'Zen Mode',
+          accelerator: 'CmdOrCtrl+Shift+Z',
+          type: 'checkbox',
+          checked: zenModeEnabled,
+          enabled: hasFile,
+          click: () => {
+            zenModeEnabled = !zenModeEnabled;
+            if (mainWindow) {
+              mainWindow.webContents.send('toggle-zen-mode');
+            }
+            updateMenu();
+          }
+        },
+        {
+          label: 'Sync Scroll',
+          type: 'checkbox',
+          checked: syncScrollEnabled,
+          enabled: viewMode === 'split',
+          click: () => {
+            syncScrollEnabled = !syncScrollEnabled;
+            store.set('syncScrollEnabled', syncScrollEnabled);
+            if (mainWindow) {
+              mainWindow.webContents.send('toggle-sync-scroll');
+            }
+            updateMenu();
           }
         },
         { type: 'separator' },
@@ -1007,7 +1042,8 @@ ipcMain.handle('get-preferences', () => {
   return {
     theme: getTheme(),
     tocVisible: getTocVisible(),
-    recentFiles: getRecentFiles()
+    recentFiles: getRecentFiles(),
+    syncScrollEnabled: syncScrollEnabled
   };
 });
 
@@ -1044,15 +1080,25 @@ ipcMain.handle('parse-markdown', (event, content) => {
   return parseMarkdown(content);
 });
 
-// Save file
+// Save file - only allows saving to the currently opened file
 ipcMain.handle('save-file', async (event, { filePath, content }) => {
+  // Security: Only allow saving to the currently opened file
+  if (!currentFilePath) {
+    return { error: 'No file is currently open.' };
+  }
+
+  const resolvedPath = path.resolve(filePath);
+  if (resolvedPath !== currentFilePath) {
+    console.warn('Attempted to save to different path than current file:', resolvedPath);
+    return { error: 'Can only save to the currently opened file.' };
+  }
+
   // Validate extension
-  if (!isAllowedFile(filePath)) {
+  if (!isAllowedFile(resolvedPath)) {
     return { error: 'Invalid file type.' };
   }
 
   try {
-    const resolvedPath = path.resolve(filePath);
     await fs.writeFile(resolvedPath, content, 'utf-8');
     return { success: true };
   } catch (err) {
@@ -1061,10 +1107,18 @@ ipcMain.handle('save-file', async (event, { filePath, content }) => {
   }
 });
 
-// Save HTML export
-ipcMain.handle('save-html-export', async (event, { filePath, content }) => {
+// Save HTML export - uses path stored in main process, ignores renderer-provided path
+ipcMain.handle('save-html-export', async (event, { content }) => {
+  // Security: Only use the path stored in main process from the Save dialog
+  if (!pendingExportPath) {
+    return { error: 'No export path set. Please use File > Export menu.' };
+  }
+
+  const exportPath = pendingExportPath;
+  pendingExportPath = null; // Clear after use
+
   try {
-    await fs.writeFile(filePath, content, 'utf-8');
+    await fs.writeFile(exportPath, content, 'utf-8');
     return { success: true };
   } catch (err) {
     console.error('Error exporting HTML:', err);

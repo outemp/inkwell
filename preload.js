@@ -1,10 +1,10 @@
 const { contextBridge, ipcRenderer, shell, webUtils } = require('electron');
 
-// Validate URL scheme - only allow http and https
+// Validate URL scheme - allow http, https, and mailto
 function isValidExternalUrl(url) {
   try {
     const parsed = new URL(url);
-    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:' || parsed.protocol === 'mailto:';
   } catch {
     return false;
   }
@@ -43,6 +43,18 @@ contextBridge.exposeInMainWorld('inkwell', {
 
   onToggleSplitView: (callback) => {
     ipcRenderer.on('toggle-split-view', () => {
+      callback();
+    });
+  },
+
+  onToggleZenMode: (callback) => {
+    ipcRenderer.on('toggle-zen-mode', () => {
+      callback();
+    });
+  },
+
+  onToggleSyncScroll: (callback) => {
+    ipcRenderer.on('toggle-sync-scroll', () => {
       callback();
     });
   },
@@ -109,8 +121,8 @@ contextBridge.exposeInMainWorld('inkwell', {
     });
   },
 
-  saveHTMLExport: async (filePath, content) => {
-    return await ipcRenderer.invoke('save-html-export', { filePath, content });
+  saveHTMLExport: async (content) => {
+    return await ipcRenderer.invoke('save-html-export', { content });
   },
 
   saveFile: async (filePath, content) => {

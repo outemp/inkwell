@@ -1009,6 +1009,11 @@ body.split-mode #content {
   padding: 80px 20px 60px;
 }
 
+/* Split mode with TOC visible */
+body.split-mode.toc-open #content {
+  margin-left: 250px;
+}
+
 /* Table of Contents Sidebar */
 #toc-sidebar {
   position: fixed;
@@ -1169,6 +1174,74 @@ body[data-theme="solarized-dark"] .mermaid-error {
 body[data-theme="dark"] .mermaid-container,
 body[data-theme="solarized-dark"] .mermaid-container {
   filter: invert(93%) hue-rotate(180deg);
+}
+
+/* Zen Mode - distraction-free writing */
+body.zen-mode {
+  background: var(--bg-primary);
+}
+
+body.zen-mode .drag-region {
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+body.zen-mode:hover .drag-region {
+  opacity: 1;
+}
+
+body.zen-mode #toc-sidebar,
+body.zen-mode #toc-sidebar.zen-hidden {
+  transform: translateX(-100%);
+}
+
+body.zen-mode .status-bar {
+  display: none !important;
+}
+
+body.zen-mode .search-bar {
+  display: none;
+}
+
+body.zen-mode .error-banner,
+body.zen-mode .conflict-banner {
+  display: none;
+}
+
+body.zen-mode #content {
+  max-width: 680px;
+  margin: 0 auto;
+  padding: 100px 40px 80px;
+}
+
+body.zen-mode.split-mode #content {
+  max-width: none;
+  padding: 80px 20px 60px;
+}
+
+body.zen-mode .split-container {
+  height: calc(100vh - 100px);
+}
+
+body.zen-mode .source-view {
+  background: var(--bg-primary);
+  border: none;
+  font-size: 1rem;
+  line-height: 1.8;
+}
+
+body.zen-mode .source-view:focus {
+  border: none;
+  outline: none;
+}
+
+body.zen-mode .split-editor {
+  border: none;
+  border-right: 1px solid var(--border-color);
+}
+
+body.zen-mode.toc-open #content {
+  margin-left: 0;
 }
 
 /* Print styles */
