@@ -11,7 +11,9 @@ const chokidar = require('chokidar');
 const store = new Store({
   defaults: {
     darkMode: false,
-    recentFiles: []
+    recentFiles: [],
+    windowBounds: { width: 900, height: 700 },
+    zoomLevel: 0
   }
 });
 
@@ -187,6 +189,58 @@ async function openFileDialog() {
   }
 }
 
+// Export to PDF
+async function exportToPDF() {
+  if (!mainWindow || !currentFilePath) {
+    sendError('No file to export.');
+    return;
+  }
+
+  const defaultName = path.basename(currentFilePath, path.extname(currentFilePath)) + '.pdf';
+  const result = await dialog.showSaveDialog(mainWindow, {
+    defaultPath: defaultName,
+    filters: [{ name: 'PDF', extensions: ['pdf'] }]
+  });
+
+  if (!result.canceled && result.filePath) {
+    try {
+      const pdfData = await mainWindow.webContents.printToPDF({
+        printBackground: true,
+        margins: { top: 0.5, bottom: 0.5, left: 0.5, right: 0.5 }
+      });
+      await fs.writeFile(result.filePath, pdfData);
+    } catch (err) {
+      console.error('Error exporting PDF:', err);
+      sendError(`Could not export PDF: ${err.message}`);
+    }
+  }
+}
+
+// Export to HTML
+async function exportToHTML() {
+  if (!mainWindow || !currentFilePath) {
+    sendError('No file to export.');
+    return;
+  }
+
+  const defaultName = path.basename(currentFilePath, path.extname(currentFilePath)) + '.html';
+  const result = await dialog.showSaveDialog(mainWindow, {
+    defaultPath: defaultName,
+    filters: [{ name: 'HTML', extensions: ['html'] }]
+  });
+
+  if (!result.canceled && result.filePath) {
+    mainWindow.webContents.send('export-html', { filePath: result.filePath });
+  }
+}
+
+// Print
+function printDocument() {
+  if (mainWindow) {
+    mainWindow.webContents.print({ printBackground: true });
+  }
+}
+
 // Build recent files submenu
 function buildRecentFilesSubmenu() {
   const recentFiles = getRecentFiles();
@@ -267,6 +321,27 @@ function createMenu() {
           }
         },
         { type: 'separator' },
+        {
+          label: 'Export',
+          submenu: [
+            {
+              label: 'Export to PDF...',
+              accelerator: 'CmdOrCtrl+E',
+              click: () => exportToPDF()
+            },
+            {
+              label: 'Export to HTML...',
+              accelerator: 'CmdOrCtrl+Shift+E',
+              click: () => exportToHTML()
+            }
+          ]
+        },
+        {
+          label: 'Print...',
+          accelerator: 'CmdOrCtrl+P',
+          click: () => printDocument()
+        },
+        { type: 'separator' },
         { role: 'close' }
       ]
     },
@@ -325,6 +400,20 @@ function createMenu() {
         { type: 'separator' },
         { role: 'front' }
       ]
+    },
+    {
+      label: 'Help',
+      submenu: [
+        {
+          label: 'Keyboard Shortcuts',
+          accelerator: 'CmdOrCtrl+/',
+          click: () => {
+            if (mainWindow) {
+              mainWindow.webContents.send('show-shortcuts');
+            }
+          }
+        }
+      ]
     }
   ];
 
@@ -338,10 +427,14 @@ function updateMenu() {
 
 function createWindow() {
   const darkMode = getDarkMode();
+  const windowBounds = store.get('windowBounds', { width: 900, height: 700 });
+  const zoomLevel = store.get('zoomLevel', 0);
 
   mainWindow = new BrowserWindow({
-    width: 900,
-    height: 700,
+    width: windowBounds.width,
+    height: windowBounds.height,
+    x: windowBounds.x,
+    y: windowBounds.y,
     minWidth: 400,
     minHeight: 300,
     titleBarStyle: 'hiddenInset',
@@ -354,6 +447,9 @@ function createWindow() {
       webSecurity: true
     }
   });
+
+  // Restore zoom level
+  mainWindow.webContents.setZoomLevel(zoomLevel);
 
   // Deny all new window/popup requests
   mainWindow.webContents.setWindowOpenHandler(() => {
@@ -372,7 +468,13 @@ function createWindow() {
     }
   });
 
+  // Save window bounds and zoom level before close
   mainWindow.on('close', (e) => {
+    // Save window state
+    const bounds = mainWindow.getBounds();
+    store.set('windowBounds', bounds);
+    store.set('zoomLevel', mainWindow.webContents.getZoomLevel());
+
     if (isDirty) {
       e.preventDefault();
       const choice = dialog.showMessageBoxSync(mainWindow, {
@@ -579,6 +681,17 @@ ipcMain.handle('save-file', async (event, { filePath, content }) => {
   } catch (err) {
     console.error('Error saving file:', err);
     return { error: `Could not save file: ${err.message}` };
+  }
+});
+
+// Save HTML export
+ipcMain.handle('save-html-export', async (event, { filePath, content }) => {
+  try {
+    await fs.writeFile(filePath, content, 'utf-8');
+    return { success: true };
+  } catch (err) {
+    console.error('Error exporting HTML:', err);
+    return { error: `Could not export HTML: ${err.message}` };
   }
 });
 

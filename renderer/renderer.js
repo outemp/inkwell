@@ -8,6 +8,11 @@ const searchCount = document.getElementById('search-count');
 const searchPrev = document.getElementById('search-prev');
 const searchNext = document.getElementById('search-next');
 const searchClose = document.getElementById('search-close');
+const statusBar = document.getElementById('status-bar');
+const wordCountEl = document.getElementById('word-count');
+const charCountEl = document.getElementById('char-count');
+const shortcutsOverlay = document.getElementById('shortcuts-overlay');
+const shortcutsClose = document.getElementById('shortcuts-close');
 
 // Search state
 let searchMatches = [];
@@ -151,6 +156,7 @@ window.inkwell.onFileOpened(({ html, raw, fileName, filePath }) => {
   setDirty(false);
   window.inkwell.setViewMode(false);
   renderMarkdown(html);
+  updateStatusBar();
 });
 
 // Listen for file changed (live reload)
@@ -162,6 +168,7 @@ window.inkwell.onFileChanged(({ html, raw }) => {
   const scrollY = window.scrollY;
   renderCurrentView();
   window.scrollTo(0, scrollY);
+  updateStatusBar();
 });
 
 // Listen for file deleted
@@ -212,6 +219,7 @@ document.addEventListener('drop', async (e) => {
           setDirty(false);
           window.inkwell.setViewMode(false);
           renderMarkdown(result.html);
+          updateStatusBar();
         }
       }
     } else {
@@ -505,6 +513,118 @@ document.addEventListener('keydown', (e) => {
     closeSearch();
   }
 });
+
+// ===== Status Bar =====
+
+function updateStatusBar() {
+  if (!currentRaw) {
+    statusBar.classList.add('hidden');
+    return;
+  }
+
+  statusBar.classList.remove('hidden');
+
+  // Count words (split by whitespace, filter empty)
+  const words = currentRaw.trim().split(/\s+/).filter(w => w.length > 0);
+  const wordCount = words.length;
+
+  // Count characters (excluding whitespace for "characters", total for reference)
+  const charCount = currentRaw.length;
+  const charCountNoSpaces = currentRaw.replace(/\s/g, '').length;
+
+  wordCountEl.textContent = `${wordCount} word${wordCount !== 1 ? 's' : ''}`;
+  charCountEl.textContent = `${charCountNoSpaces} characters`;
+}
+
+// ===== Shortcuts Overlay =====
+
+function showShortcuts() {
+  shortcutsOverlay.classList.remove('hidden');
+}
+
+function hideShortcuts() {
+  shortcutsOverlay.classList.add('hidden');
+}
+
+shortcutsClose.addEventListener('click', hideShortcuts);
+
+// Close on overlay background click
+shortcutsOverlay.addEventListener('click', (e) => {
+  if (e.target === shortcutsOverlay) {
+    hideShortcuts();
+  }
+});
+
+// Close on Escape
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !shortcutsOverlay.classList.contains('hidden')) {
+    hideShortcuts();
+  }
+});
+
+// Listen for show-shortcuts from main process (Cmd+/)
+window.inkwell.onShowShortcuts(() => {
+  showShortcuts();
+});
+
+// ===== Export HTML =====
+
+window.inkwell.onExportHTML(async ({ filePath }) => {
+  // Generate standalone HTML
+  const htmlContent = generateExportHTML();
+  const result = await window.inkwell.saveHTMLExport(filePath, htmlContent);
+  if (result.error) {
+    showError(result.error);
+  }
+});
+
+function generateExportHTML() {
+  const darkMode = document.body.classList.contains('dark');
+  const title = currentFileName || 'Document';
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${escapeHtmlText(title)}</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+      font-size: 16px;
+      line-height: 1.7;
+      color: ${darkMode ? '#e0e0e0' : '#37352f'};
+      background: ${darkMode ? '#1a1a1a' : '#ffffff'};
+      max-width: 720px;
+      margin: 0 auto;
+      padding: 40px;
+    }
+    h1, h2, h3, h4, h5, h6 { font-family: Georgia, serif; font-weight: 600; margin-top: 1.5em; }
+    h1 { font-size: 2.25rem; border-bottom: 1px solid ${darkMode ? '#3a3a3a' : '#e9e9e7'}; padding-bottom: 0.3em; }
+    h2 { font-size: 1.75rem; border-bottom: 1px solid ${darkMode ? '#3a3a3a' : '#e9e9e7'}; padding-bottom: 0.2em; }
+    a { color: ${darkMode ? '#4fc3f7' : '#0077aa'}; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    code { font-family: 'SF Mono', Monaco, monospace; background: ${darkMode ? '#2d2d2d' : '#f7f6f3'}; padding: 0.2em 0.4em; border-radius: 4px; }
+    pre { background: ${darkMode ? '#2d2d2d' : '#f7f6f3'}; padding: 1em; border-radius: 6px; overflow-x: auto; }
+    pre code { background: none; padding: 0; }
+    blockquote { margin: 1em 0; padding: 0.5em 1em; border-left: 3px solid ${darkMode ? '#3a3a3a' : '#e9e9e7'}; color: ${darkMode ? '#a0a0a0' : '#6b6b6b'}; }
+    table { border-collapse: collapse; width: 100%; margin: 1em 0; }
+    th, td { padding: 10px 14px; border: 1px solid ${darkMode ? '#3a3a3a' : '#e9e9e7'}; text-align: left; }
+    th { background: ${darkMode ? '#252525' : '#f7f6f3'}; }
+    img { max-width: 100%; }
+  </style>
+</head>
+<body>
+  <article>${currentHtml}</article>
+</body>
+</html>`;
+}
+
+function escapeHtmlText(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
 
 // Initialize dark mode on load
 (async function init() {

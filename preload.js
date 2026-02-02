@@ -65,6 +65,22 @@ contextBridge.exposeInMainWorld('inkwell', {
     });
   },
 
+  onExportHTML: (callback) => {
+    ipcRenderer.on('export-html', (event, data) => {
+      callback(data);
+    });
+  },
+
+  onShowShortcuts: (callback) => {
+    ipcRenderer.on('show-shortcuts', () => {
+      callback();
+    });
+  },
+
+  saveHTMLExport: async (filePath, content) => {
+    return await ipcRenderer.invoke('save-html-export', { filePath, content });
+  },
+
   saveFile: async (filePath, content) => {
     return await ipcRenderer.invoke('save-file', { filePath, content });
   },

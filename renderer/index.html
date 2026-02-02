@@ -31,6 +31,51 @@
     </div>
   </main>
 
+  <footer id="status-bar" class="status-bar hidden">
+    <span id="word-count"></span>
+    <span class="status-separator">|</span>
+    <span id="char-count"></span>
+  </footer>
+
+  <div id="shortcuts-overlay" class="shortcuts-overlay hidden">
+    <div class="shortcuts-modal">
+      <div class="shortcuts-header">
+        <h2>Keyboard Shortcuts</h2>
+        <button id="shortcuts-close" class="shortcuts-close">&times;</button>
+      </div>
+      <div class="shortcuts-content">
+        <div class="shortcuts-section">
+          <h3>File</h3>
+          <div class="shortcut-row"><span class="shortcut-keys">Cmd+O</span><span>Open file</span></div>
+          <div class="shortcut-row"><span class="shortcut-keys">Cmd+S</span><span>Save file</span></div>
+          <div class="shortcut-row"><span class="shortcut-keys">Cmd+E</span><span>Export to PDF</span></div>
+          <div class="shortcut-row"><span class="shortcut-keys">Cmd+Shift+E</span><span>Export to HTML</span></div>
+          <div class="shortcut-row"><span class="shortcut-keys">Cmd+P</span><span>Print</span></div>
+          <div class="shortcut-row"><span class="shortcut-keys">Cmd+W</span><span>Close window</span></div>
+        </div>
+        <div class="shortcuts-section">
+          <h3>Edit</h3>
+          <div class="shortcut-row"><span class="shortcut-keys">Cmd+F</span><span>Find in document</span></div>
+          <div class="shortcut-row"><span class="shortcut-keys">Enter</span><span>Next match</span></div>
+          <div class="shortcut-row"><span class="shortcut-keys">Shift+Enter</span><span>Previous match</span></div>
+          <div class="shortcut-row"><span class="shortcut-keys">Escape</span><span>Close search</span></div>
+        </div>
+        <div class="shortcuts-section">
+          <h3>View</h3>
+          <div class="shortcut-row"><span class="shortcut-keys">Cmd+U</span><span>Toggle source view</span></div>
+          <div class="shortcut-row"><span class="shortcut-keys">Cmd+D</span><span>Toggle dark mode</span></div>
+          <div class="shortcut-row"><span class="shortcut-keys">Cmd++</span><span>Zoom in</span></div>
+          <div class="shortcut-row"><span class="shortcut-keys">Cmd+-</span><span>Zoom out</span></div>
+          <div class="shortcut-row"><span class="shortcut-keys">Cmd+0</span><span>Reset zoom</span></div>
+        </div>
+        <div class="shortcuts-section">
+          <h3>Help</h3>
+          <div class="shortcut-row"><span class="shortcut-keys">Cmd+/</span><span>Show shortcuts</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script src="renderer.js"></script>
 </body>
 </html>
