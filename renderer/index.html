@@ -10,6 +10,14 @@
 <body>
   <div class="drag-region"></div>
 
+  <div id="search-bar" class="search-bar hidden">
+    <input type="text" id="search-input" placeholder="Find in document..." autocomplete="off" spellcheck="false">
+    <span id="search-count" class="search-count"></span>
+    <button id="search-prev" class="search-nav" title="Previous (Shift+Enter)">&uarr;</button>
+    <button id="search-next" class="search-nav" title="Next (Enter)">&darr;</button>
+    <button id="search-close" class="search-close" title="Close (Escape)">&times;</button>
+  </div>
+
   <div id="error-banner" class="error-banner hidden">
     <span id="error-message"></span>
     <button id="error-dismiss" class="error-dismiss">&times;</button>

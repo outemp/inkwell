@@ -4,6 +4,16 @@ const fs = require('fs').promises;
 const { marked } = require('marked');
 const hljs = require('highlight.js');
 const { markedHighlight } = require('marked-highlight');
+const Store = require('electron-store');
+const chokidar = require('chokidar');
+
+// Initialize electron-store for preferences
+const store = new Store({
+  defaults: {
+    darkMode: false,
+    recentFiles: []
+  }
+});
 
 // Configure marked with highlight.js
 marked.use(markedHighlight({
@@ -50,13 +60,115 @@ function parseMarkdown(content) {
 
 let mainWindow = null;
 let fileToOpen = null;
+let currentFilePath = null;
+let fileWatcher = null;
+let debounceTimer = null;
 
 // Allowed file extensions
 const ALLOWED_EXTENSIONS = ['.md', '.markdown'];
+const MAX_RECENT_FILES = 10;
 
 function isAllowedFile(filePath) {
   const ext = path.extname(filePath).toLowerCase();
   return ALLOWED_EXTENSIONS.includes(ext);
+}
+
+// Recent files management
+function getRecentFiles() {
+  return store.get('recentFiles', []);
+}
+
+function addRecentFile(filePath) {
+  let recent = getRecentFiles();
+  // Remove if already exists
+  recent = recent.filter(item => item.path !== filePath);
+  // Add to beginning
+  recent.unshift({ path: filePath, timestamp: Date.now() });
+  // Limit to max
+  recent = recent.slice(0, MAX_RECENT_FILES);
+  store.set('recentFiles', recent);
+  updateMenu();
+}
+
+function clearRecentFiles() {
+  store.set('recentFiles', []);
+  updateMenu();
+}
+
+// File watcher management
+function startWatching(filePath) {
+  stopWatching();
+
+  fileWatcher = chokidar.watch(filePath, {
+    persistent: true,
+    ignoreInitial: true,
+    awaitWriteFinish: {
+      stabilityThreshold: 100,
+      pollInterval: 50
+    }
+  });
+
+  fileWatcher.on('change', () => {
+    // Debounce 300ms
+    if (debounceTimer) clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(() => {
+      reloadCurrentFile();
+    }, 300);
+  });
+
+  fileWatcher.on('unlink', () => {
+    stopWatching();
+    if (mainWindow) {
+      mainWindow.webContents.send('file-deleted', { filePath });
+    }
+  });
+
+  fileWatcher.on('error', (error) => {
+    console.error('File watcher error:', error);
+    stopWatching();
+  });
+}
+
+function stopWatching() {
+  if (debounceTimer) {
+    clearTimeout(debounceTimer);
+    debounceTimer = null;
+  }
+  if (fileWatcher) {
+    fileWatcher.close();
+    fileWatcher = null;
+  }
+}
+
+async function reloadCurrentFile() {
+  if (!currentFilePath || !mainWindow) return;
+
+  try {
+    const content = await fs.readFile(currentFilePath, 'utf-8');
+    const html = parseMarkdown(content);
+    mainWindow.webContents.send('file-changed', { html });
+  } catch (err) {
+    console.error('Error reloading file:', err);
+    stopWatching();
+    mainWindow.webContents.send('file-deleted', { filePath: currentFilePath });
+  }
+}
+
+// Dark mode management
+function getDarkMode() {
+  return store.get('darkMode', false);
+}
+
+function setDarkMode(enabled) {
+  store.set('darkMode', enabled);
+  if (mainWindow) {
+    mainWindow.webContents.send('preferences-changed', { darkMode: enabled });
+  }
+  updateMenu();
+}
+
+function toggleDarkMode() {
+  setDarkMode(!getDarkMode());
 }
 
 // Open file dialog
@@ -73,8 +185,48 @@ async function openFileDialog() {
   }
 }
 
+// Build recent files submenu
+function buildRecentFilesSubmenu() {
+  const recentFiles = getRecentFiles();
+
+  if (recentFiles.length === 0) {
+    return [
+      { label: 'No Recent Files', enabled: false }
+    ];
+  }
+
+  const items = recentFiles.map(item => ({
+    label: path.basename(item.path),
+    click: () => openRecentFile(item.path)
+  }));
+
+  items.push({ type: 'separator' });
+  items.push({
+    label: 'Clear Recent',
+    click: () => clearRecentFiles()
+  });
+
+  return items;
+}
+
+async function openRecentFile(filePath) {
+  try {
+    await fs.access(filePath);
+    openFile(filePath);
+  } catch {
+    // File no longer exists
+    let recent = getRecentFiles();
+    recent = recent.filter(item => item.path !== filePath);
+    store.set('recentFiles', recent);
+    updateMenu();
+    sendError(`File no longer exists: ${path.basename(filePath)}`);
+  }
+}
+
 // Create application menu
 function createMenu() {
+  const darkMode = getDarkMode();
+
   const template = [
     {
       label: app.name,
@@ -98,6 +250,10 @@ function createMenu() {
           accelerator: 'CmdOrCtrl+O',
           click: () => openFileDialog()
         },
+        {
+          label: 'Open Recent',
+          submenu: buildRecentFilesSubmenu()
+        },
         { type: 'separator' },
         { role: 'close' }
       ]
@@ -106,12 +262,30 @@ function createMenu() {
       label: 'Edit',
       submenu: [
         { role: 'copy' },
-        { role: 'selectAll' }
+        { role: 'selectAll' },
+        { type: 'separator' },
+        {
+          label: 'Find...',
+          accelerator: 'CmdOrCtrl+F',
+          click: () => {
+            if (mainWindow) {
+              mainWindow.webContents.send('toggle-find');
+            }
+          }
+        }
       ]
     },
     {
       label: 'View',
       submenu: [
+        {
+          label: 'Dark Mode',
+          accelerator: 'CmdOrCtrl+D',
+          type: 'checkbox',
+          checked: darkMode,
+          click: () => toggleDarkMode()
+        },
+        { type: 'separator' },
         { role: 'reload' },
         { role: 'toggleDevTools' },
         { type: 'separator' },
@@ -137,14 +311,20 @@ function createMenu() {
   Menu.setApplicationMenu(menu);
 }
 
+function updateMenu() {
+  createMenu();
+}
+
 function createWindow() {
+  const darkMode = getDarkMode();
+
   mainWindow = new BrowserWindow({
     width: 900,
     height: 700,
     minWidth: 400,
     minHeight: 300,
     titleBarStyle: 'hiddenInset',
-    backgroundColor: '#ffffff',
+    backgroundColor: darkMode ? '#1a1a1a' : '#ffffff',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -162,6 +342,9 @@ function createWindow() {
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
 
   mainWindow.webContents.on('did-finish-load', () => {
+    // Send initial preferences
+    mainWindow.webContents.send('preferences-changed', { darkMode: getDarkMode() });
+
     if (fileToOpen) {
       openFile(fileToOpen);
       fileToOpen = null;
@@ -169,7 +352,9 @@ function createWindow() {
   });
 
   mainWindow.on('closed', () => {
+    stopWatching();
     mainWindow = null;
+    currentFilePath = null;
   });
 }
 
@@ -199,6 +384,13 @@ async function openFile(filePath) {
     const content = await fs.readFile(resolvedPath, 'utf-8');
     const fileName = path.basename(resolvedPath);
     const html = parseMarkdown(content);
+
+    // Update current file and start watching
+    currentFilePath = resolvedPath;
+    startWatching(resolvedPath);
+
+    // Add to recent files
+    addRecentFile(resolvedPath);
 
     mainWindow.webContents.send('file-opened', { html, fileName, filePath: resolvedPath });
     mainWindow.setTitle(`${fileName} - Inkwell`);
@@ -285,9 +477,31 @@ if (!gotTheLock) {
 }
 
 app.on('window-all-closed', () => {
+  stopWatching();
   if (process.platform !== 'darwin') {
     app.quit();
   }
+});
+
+// IPC Handlers
+
+// Get preferences
+ipcMain.handle('get-preferences', () => {
+  return {
+    darkMode: getDarkMode(),
+    recentFiles: getRecentFiles()
+  };
+});
+
+// Toggle dark mode
+ipcMain.handle('toggle-dark-mode', () => {
+  toggleDarkMode();
+  return getDarkMode();
+});
+
+// Clear recent files
+ipcMain.handle('clear-recent-files', () => {
+  clearRecentFiles();
 });
 
 // Handle requests from renderer to open files via drag-drop
@@ -310,6 +524,13 @@ ipcMain.handle('open-dropped-file', async (event, filePath) => {
     const content = await fs.readFile(resolvedPath, 'utf-8');
     const fileName = path.basename(resolvedPath);
     const html = parseMarkdown(content);
+
+    // Update current file and start watching
+    currentFilePath = resolvedPath;
+    startWatching(resolvedPath);
+
+    // Add to recent files
+    addRecentFile(resolvedPath);
 
     mainWindow.setTitle(`${fileName} - Inkwell`);
     return { html, fileName, filePath: resolvedPath };
