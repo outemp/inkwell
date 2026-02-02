@@ -5,6 +5,10 @@ A beautiful, minimal Markdown viewer for macOS.
 ## Features
 
 - Clean, distraction-free reading experience
+- Dark mode (Cmd+D)
+- Live file watching with auto-reload
+- Find in document (Cmd+F)
+- Recent files menu
 - Syntax highlighting for code blocks
 - GitHub Flavored Markdown (GFM) support
 - Drag and drop files to open
@@ -12,6 +16,15 @@ A beautiful, minimal Markdown viewer for macOS.
 - File associations for `.md` and `.markdown` files
 
 ## Installation
+
+### Homebrew (Recommended)
+
+```bash
+brew tap outemp/inkwell
+brew install --cask --no-quarantine inkwell
+```
+
+> **Note:** The `--no-quarantine` flag is required because the app is not code-signed.
 
 ### From Source
 
@@ -38,7 +51,9 @@ This creates a `.dmg` installer in the `dist/` folder.
 ## Usage
 
 - **Open a file**: Use `Cmd+O` or drag a `.md` file onto the window
-- **Double-click**: Associate `.md` files with Inkwell to open them directly
+- **Find**: Use `Cmd+F` to search within the document
+- **Dark mode**: Use `Cmd+D` to toggle dark mode
+- **Recent files**: File > Open Recent
 - **Zoom**: Use `Cmd++` / `Cmd+-` to adjust text size
 
 ## Tech Stack
