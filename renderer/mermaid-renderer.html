@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval'; style-src 'unsafe-inline';">
+  <title>Mermaid Renderer</title>
+</head>
+<body>
+  <div id="render-container"></div>
+  <script>
+    // Mermaid library will be injected by the main process via executeJavaScript
+    // This sets up the render function that will be called after mermaid is loaded
+    window.mermaidReady = false;
+    window.renderDiagram = async (id, code) => {
+      if (!window.mermaid) {
+        return { error: 'Mermaid not loaded' };
+      }
+      try {
+        const { svg } = await mermaid.render(id, code);
+        return { svg };
+      } catch (err) {
+        return { error: err.message || 'Render failed' };
+      }
+    };
+  </script>
+</body>
+</html>

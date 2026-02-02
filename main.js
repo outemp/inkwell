@@ -1,21 +1,150 @@
-const { app, BrowserWindow, ipcMain, Menu, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, Menu, dialog, protocol } = require('electron');
 const path = require('path');
 const fs = require('fs').promises;
+const fsSync = require('fs');
 const { marked } = require('marked');
 const hljs = require('highlight.js');
 const { markedHighlight } = require('marked-highlight');
 const Store = require('electron-store');
 const chokidar = require('chokidar');
+const katex = require('katex');
+
+// Mermaid rendering using a hidden BrowserWindow with secure settings
+let mermaidWindow = null;
+let mermaidReady = false;
+let mermaidPendingRequests = new Map();
+let mermaidRequestId = 0;
+
+// Register custom protocol for serving mermaid assets securely
+function registerMermaidProtocol() {
+  protocol.registerFileProtocol('mermaid-asset', (request, callback) => {
+    const url = request.url.replace('mermaid-asset://', '');
+    let filePath;
+
+    if (url === 'mermaid.min.js') {
+      try {
+        filePath = require.resolve('mermaid/dist/mermaid.min.js');
+      } catch {
+        callback({ statusCode: 404 });
+        return;
+      }
+    } else if (url === 'renderer.html') {
+      filePath = path.join(__dirname, 'renderer', 'mermaid-renderer.html');
+    } else {
+      callback({ statusCode: 404 });
+      return;
+    }
+
+    callback({ path: filePath });
+  });
+}
+
+function createMermaidWindow() {
+  if (mermaidWindow) return;
+
+  mermaidWindow = new BrowserWindow({
+    width: 800,
+    height: 600,
+    show: false,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
+      webSecurity: true
+    }
+  });
+
+  // Load the mermaid renderer page via custom protocol
+  mermaidWindow.loadURL('mermaid-asset://renderer.html');
+
+  mermaidWindow.webContents.on('did-finish-load', () => {
+    // Inject mermaid library and initialize
+    const mermaidCode = fsSync.readFileSync(require.resolve('mermaid/dist/mermaid.min.js'), 'utf-8');
+    mermaidWindow.webContents.executeJavaScript(`
+      ${mermaidCode}
+      mermaid.initialize({ startOnLoad: false, theme: 'default', securityLevel: 'strict' });
+      window.mermaidReady = true;
+    `).then(() => {
+      mermaidReady = true;
+      processMermaidQueue();
+    }).catch(err => {
+      console.error('Failed to initialize mermaid:', err);
+    });
+  });
+
+  mermaidWindow.on('closed', () => {
+    mermaidWindow = null;
+    mermaidReady = false;
+  });
+}
+
+function processMermaidQueue() {
+  if (!mermaidReady || !mermaidWindow) return;
+
+  for (const [requestId, { code, resolve, reject }] of mermaidPendingRequests) {
+    const safeCode = JSON.stringify(code);
+    mermaidWindow.webContents.executeJavaScript(`window.renderDiagram('mermaid-${requestId}', ${safeCode})`)
+      .then(result => {
+        mermaidPendingRequests.delete(requestId);
+        if (result && result.error) {
+          reject(new Error(result.error));
+        } else if (result && result.svg) {
+          resolve(result.svg);
+        } else if (typeof result === 'string') {
+          resolve(result);
+        } else {
+          reject(new Error('Invalid mermaid result'));
+        }
+      })
+      .catch(err => {
+        mermaidPendingRequests.delete(requestId);
+        reject(err);
+      });
+  }
+}
+
+async function renderMermaid(code) {
+  return new Promise((resolve, reject) => {
+    const requestId = mermaidRequestId++;
+    mermaidPendingRequests.set(requestId, { code, resolve, reject });
+
+    // Set a timeout to avoid hanging
+    setTimeout(() => {
+      if (mermaidPendingRequests.has(requestId)) {
+        mermaidPendingRequests.delete(requestId);
+        reject(new Error('Mermaid render timeout'));
+      }
+    }, 10000);
+
+    if (!mermaidWindow) {
+      createMermaidWindow();
+    } else if (mermaidReady) {
+      processMermaidQueue();
+    }
+  });
+}
 
 // Initialize electron-store for preferences
 const store = new Store({
   defaults: {
-    darkMode: false,
+    theme: 'light',
     recentFiles: [],
     windowBounds: { width: 900, height: 700 },
-    zoomLevel: 0
+    zoomLevel: 0,
+    tocVisible: false
   }
 });
+
+// Migrate legacy darkMode preference to theme
+(function migrateLegacyPrefs() {
+  if (store.has('darkMode')) {
+    const wasDark = store.get('darkMode');
+    if (wasDark && !store.has('theme')) {
+      store.set('theme', 'dark');
+    }
+    store.delete('darkMode');
+  }
+})();
 
 // Configure marked with highlight.js
 marked.use(markedHighlight({
@@ -34,14 +163,69 @@ marked.use({
   pedantic: false
 });
 
-// Custom renderer to escape any HTML in the markdown
-const renderer = new marked.Renderer();
-const originalHtml = renderer.html.bind(renderer);
-renderer.html = (html) => {
-  // Escape HTML blocks instead of rendering them
-  return `<pre><code>${escapeHtml(html.text)}</code></pre>`;
+// KaTeX extension for math rendering
+const katexExtension = {
+  name: 'math',
+  level: 'inline',
+  start(src) {
+    // Find the start of inline math $...$ or block math $$...$$
+    const blockMatch = src.indexOf('$$');
+    const inlineMatch = src.indexOf('$');
+    if (blockMatch === 0) return 0;
+    if (inlineMatch === 0 && src[1] !== '$') return 0;
+    if (blockMatch > 0 && (inlineMatch < 0 || blockMatch < inlineMatch)) return blockMatch;
+    if (inlineMatch > 0) return inlineMatch;
+    return -1;
+  },
+  tokenizer(src) {
+    // Block math: $$...$$
+    const blockRule = /^\$\$([\s\S]+?)\$\$/;
+    const blockMatch = blockRule.exec(src);
+    if (blockMatch) {
+      return {
+        type: 'math',
+        raw: blockMatch[0],
+        text: blockMatch[1].trim(),
+        displayMode: true
+      };
+    }
+
+    // Inline math: $...$ (but not $$)
+    const inlineRule = /^\$([^\$\n]+?)\$/;
+    const inlineMatch = inlineRule.exec(src);
+    if (inlineMatch) {
+      return {
+        type: 'math',
+        raw: inlineMatch[0],
+        text: inlineMatch[1].trim(),
+        displayMode: false
+      };
+    }
+  },
+  renderer(token) {
+    try {
+      const html = katex.renderToString(token.text, {
+        displayMode: token.displayMode,
+        throwOnError: false,
+        strict: false,
+        trust: false
+      });
+      return token.displayMode
+        ? `<div class="math-block">${html}</div>`
+        : `<span class="math-inline">${html}</span>`;
+    } catch (err) {
+      const escapedText = escapeHtml(token.text);
+      const escapedError = escapeHtml(err.message);
+      return token.displayMode
+        ? `<div class="math-block math-error">Math error: ${escapedError}<br><code>${escapedText}</code></div>`
+        : `<span class="math-inline math-error" title="${escapedError}">${escapedText}</span>`;
+    }
+  }
 };
 
+marked.use({ extensions: [katexExtension] });
+
+// Helper to escape HTML
 function escapeHtml(text) {
   const map = {
     '&': '&amp;',
@@ -52,6 +236,83 @@ function escapeHtml(text) {
   };
   return text.replace(/[&<>"']/g, m => map[m]);
 }
+
+// Allowed URL schemes for links
+const ALLOWED_LINK_SCHEMES = ['http:', 'https:', 'mailto:'];
+
+function sanitizeLinkHref(href) {
+  if (!href) return '';
+  try {
+    // Handle relative URLs (they're safe)
+    if (href.startsWith('/') || href.startsWith('#') || href.startsWith('./') || href.startsWith('../')) {
+      return href;
+    }
+    const url = new URL(href, 'http://example.com');
+    if (ALLOWED_LINK_SCHEMES.includes(url.protocol)) {
+      return href;
+    }
+    // Disallowed scheme - return empty to disable link
+    return '';
+  } catch {
+    // Invalid URL - escape and return as-is for relative paths
+    return href.startsWith('#') ? href : '';
+  }
+}
+
+// Custom renderer to escape any HTML in the markdown and handle mermaid
+const renderer = new marked.Renderer();
+
+// Sanitize links to prevent javascript: and other dangerous schemes
+const originalLink = renderer.link.bind(renderer);
+renderer.link = function(token) {
+  // Handle both object form (newer marked) and positional arguments
+  const href = typeof token === 'object' ? token.href : token;
+  const title = typeof token === 'object' ? token.title : arguments[1];
+  const text = typeof token === 'object' ? token.text : arguments[2];
+
+  const sanitizedHref = sanitizeLinkHref(href);
+  if (!sanitizedHref) {
+    // Dangerous link - render as plain text
+    return escapeHtml(text || href);
+  }
+
+  const escapedHref = escapeHtml(sanitizedHref);
+  const escapedTitle = title ? ` title="${escapeHtml(title)}"` : '';
+  const escapedText = typeof token === 'object' && token.tokens
+    ? this.parser.parseInline(token.tokens)
+    : escapeHtml(text || href);
+
+  return `<a href="${escapedHref}"${escapedTitle}>${escapedText}</a>`;
+};
+
+// Escape HTML blocks
+const originalHtml = renderer.html.bind(renderer);
+renderer.html = (html) => {
+  // Handle both string and token forms
+  const htmlText = typeof html === 'object' ? html.text : html;
+  return `<pre><code>${escapeHtml(htmlText || '')}</code></pre>`;
+};
+
+// Handle mermaid code blocks
+const originalCode = renderer.code.bind(renderer);
+renderer.code = function(code) {
+  // Handle both object form (newer marked) and positional arguments
+  const codeText = typeof code === 'object' ? code.text : code;
+  const lang = typeof code === 'object' ? code.lang : arguments[1];
+
+  if (lang === 'mermaid') {
+    // Wrap mermaid code in a special container for client-side rendering
+    const escapedCode = escapeHtml(codeText);
+    return `<div class="mermaid-container"><pre class="mermaid-source" style="display:none;">${escapedCode}</pre><div class="mermaid">${escapedCode}</div></div>`;
+  }
+  // For other code blocks, use the highlight.js renderer (already configured)
+  if (originalCode) {
+    return originalCode(code);
+  }
+  const language = hljs.getLanguage(lang) ? lang : 'plaintext';
+  const highlighted = hljs.highlight(codeText, { language }).value;
+  return `<pre><code class="hljs language-${language}">${highlighted}</code></pre>`;
+};
 
 marked.use({ renderer });
 
@@ -65,7 +326,7 @@ let fileToOpen = null;
 let currentFilePath = null;
 let fileWatcher = null;
 let debounceTimer = null;
-let isSourceView = false;
+let viewMode = 'rendered'; // 'rendered' | 'source' | 'split'
 let isDirty = false;
 
 // Allowed file extensions
@@ -158,21 +419,39 @@ async function reloadCurrentFile() {
   }
 }
 
-// Dark mode management
-function getDarkMode() {
-  return store.get('darkMode', false);
+// Theme management
+const VALID_THEMES = ['light', 'dark', 'sepia', 'solarized-light', 'solarized-dark'];
+
+function getTheme() {
+  return store.get('theme', 'light');
 }
 
-function setDarkMode(enabled) {
-  store.set('darkMode', enabled);
+function setTheme(theme) {
+  if (!VALID_THEMES.includes(theme)) {
+    theme = 'light';
+  }
+  store.set('theme', theme);
   if (mainWindow) {
-    mainWindow.webContents.send('preferences-changed', { darkMode: enabled });
+    mainWindow.webContents.send('theme-changed', { theme });
   }
   updateMenu();
 }
 
-function toggleDarkMode() {
-  setDarkMode(!getDarkMode());
+// TOC visibility management
+function getTocVisible() {
+  return store.get('tocVisible', false);
+}
+
+function setTocVisible(visible) {
+  store.set('tocVisible', visible);
+  if (mainWindow) {
+    mainWindow.webContents.send('toc-visibility-changed', { visible });
+  }
+  updateMenu();
+}
+
+function toggleToc() {
+  setTocVisible(!getTocVisible());
 }
 
 // Open file dialog
@@ -281,7 +560,9 @@ async function openRecentFile(filePath) {
 
 // Create application menu
 function createMenu() {
-  const darkMode = getDarkMode();
+  const currentTheme = getTheme();
+  const tocVisible = getTocVisible();
+  const hasFile = !!currentFilePath;
 
   const template = [
     {
@@ -366,15 +647,65 @@ function createMenu() {
       label: 'View',
       submenu: [
         {
-          label: 'Dark Mode',
-          accelerator: 'CmdOrCtrl+D',
+          label: 'Theme',
+          submenu: [
+            {
+              label: 'Light',
+              type: 'radio',
+              checked: currentTheme === 'light',
+              click: () => setTheme('light')
+            },
+            {
+              label: 'Dark',
+              type: 'radio',
+              checked: currentTheme === 'dark',
+              click: () => setTheme('dark')
+            },
+            {
+              label: 'Sepia',
+              type: 'radio',
+              checked: currentTheme === 'sepia',
+              click: () => setTheme('sepia')
+            },
+            {
+              label: 'Solarized Light',
+              type: 'radio',
+              checked: currentTheme === 'solarized-light',
+              click: () => setTheme('solarized-light')
+            },
+            {
+              label: 'Solarized Dark',
+              type: 'radio',
+              checked: currentTheme === 'solarized-dark',
+              click: () => setTheme('solarized-dark')
+            }
+          ]
+        },
+        { type: 'separator' },
+        {
+          label: 'Table of Contents',
+          accelerator: 'CmdOrCtrl+T',
           type: 'checkbox',
-          checked: darkMode,
-          click: () => toggleDarkMode()
+          checked: tocVisible,
+          enabled: hasFile && viewMode !== 'source',
+          click: () => toggleToc()
         },
         {
-          label: isSourceView ? 'View Rendered' : 'View Source',
+          label: 'Split View',
+          accelerator: 'CmdOrCtrl+Shift+S',
+          type: 'checkbox',
+          checked: viewMode === 'split',
+          enabled: hasFile,
+          click: () => {
+            if (mainWindow) {
+              mainWindow.webContents.send('toggle-split-view');
+            }
+          }
+        },
+        {
+          label: viewMode === 'source' ? 'View Rendered' : 'View Source',
           accelerator: 'CmdOrCtrl+U',
+          enabled: hasFile && viewMode !== 'split',
           click: () => {
             if (mainWindow) {
               mainWindow.webContents.send('toggle-view-source');
@@ -425,8 +756,20 @@ function updateMenu() {
   createMenu();
 }
 
+// Get background color for theme
+function getThemeBackgroundColor(theme) {
+  const bgColors = {
+    'light': '#ffffff',
+    'dark': '#1a1a1a',
+    'sepia': '#f5f0e6',
+    'solarized-light': '#fdf6e3',
+    'solarized-dark': '#002b36'
+  };
+  return bgColors[theme] || '#ffffff';
+}
+
 function createWindow() {
-  const darkMode = getDarkMode();
+  const theme = getTheme();
   const windowBounds = store.get('windowBounds', { width: 900, height: 700 });
   const zoomLevel = store.get('zoomLevel', 0);
 
@@ -438,7 +781,7 @@ function createWindow() {
     minWidth: 400,
     minHeight: 300,
     titleBarStyle: 'hiddenInset',
-    backgroundColor: darkMode ? '#1a1a1a' : '#ffffff',
+    backgroundColor: getThemeBackgroundColor(theme),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -460,7 +803,8 @@ function createWindow() {
 
   mainWindow.webContents.on('did-finish-load', () => {
     // Send initial preferences
-    mainWindow.webContents.send('preferences-changed', { darkMode: getDarkMode() });
+    mainWindow.webContents.send('theme-changed', { theme: getTheme() });
+    mainWindow.webContents.send('toc-visibility-changed', { visible: getTocVisible() });
 
     if (fileToOpen) {
       openFile(fileToOpen);
@@ -505,10 +849,33 @@ function createWindow() {
   });
 }
 
-async function openFile(filePath) {
+async function openFile(filePath, skipDirtyCheck = false) {
   if (!mainWindow) {
     fileToOpen = filePath;
     return;
+  }
+
+  // Check for unsaved changes before opening a new file
+  if (isDirty && !skipDirtyCheck && currentFilePath) {
+    const choice = dialog.showMessageBoxSync(mainWindow, {
+      type: 'warning',
+      buttons: ['Save', 'Don\'t Save', 'Cancel'],
+      defaultId: 0,
+      cancelId: 2,
+      title: 'Unsaved Changes',
+      message: 'You have unsaved changes. Do you want to save before opening a new file?'
+    });
+
+    if (choice === 0) {
+      // Save first, then open the new file
+      mainWindow.webContents.send('save-before-open', { pendingFilePath: filePath });
+      return;
+    } else if (choice === 2) {
+      // Cancel - don't open the new file
+      return;
+    }
+    // choice === 1: Don't Save - continue opening new file
+    isDirty = false;
   }
 
   // Validate file extension
@@ -611,6 +978,9 @@ if (!gotTheLock) {
   });
 
   app.whenReady().then(() => {
+    // Register custom protocol for mermaid assets
+    registerMermaidProtocol();
+
     createMenu();
     createWindow();
     handleCommandLineArgs(process.argv);
@@ -635,15 +1005,22 @@ app.on('window-all-closed', () => {
 // Get preferences
 ipcMain.handle('get-preferences', () => {
   return {
-    darkMode: getDarkMode(),
+    theme: getTheme(),
+    tocVisible: getTocVisible(),
     recentFiles: getRecentFiles()
   };
 });
 
-// Toggle dark mode
-ipcMain.handle('toggle-dark-mode', () => {
-  toggleDarkMode();
-  return getDarkMode();
+// Set theme
+ipcMain.handle('set-theme', (event, theme) => {
+  setTheme(theme);
+  return getTheme();
+});
+
+// Set TOC visibility
+ipcMain.handle('set-toc-visible', (event, visible) => {
+  setTocVisible(visible);
+  return getTocVisible();
 });
 
 // Clear recent files
@@ -652,8 +1029,8 @@ ipcMain.handle('clear-recent-files', () => {
 });
 
 // Set view mode (for menu label)
-ipcMain.handle('set-view-mode', (event, sourceView) => {
-  isSourceView = sourceView;
+ipcMain.handle('set-view-mode', (event, mode) => {
+  viewMode = mode;
   updateMenu();
 });
 
@@ -728,5 +1105,27 @@ ipcMain.handle('open-dropped-file', async (event, filePath) => {
   } catch (err) {
     console.error('Error reading dropped file:', err);
     return { error: `Could not open file: ${err.message}` };
+  }
+});
+
+// Open file after save (used when saving before opening a new file)
+ipcMain.handle('open-file-after-save', async (event, filePath) => {
+  isDirty = false;
+  await openFile(filePath, true);
+});
+
+// Check if there are unsaved changes (for drag-drop handling)
+ipcMain.handle('check-dirty-state', () => {
+  return isDirty;
+});
+
+// Render mermaid diagram
+ipcMain.handle('render-mermaid', async (event, code) => {
+  try {
+    const svg = await renderMermaid(code);
+    return svg;
+  } catch (err) {
+    console.error('Mermaid render error:', err);
+    throw new Error(err.message || 'Failed to render diagram');
   }
 });

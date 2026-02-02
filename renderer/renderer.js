@@ -13,6 +13,8 @@ const wordCountEl = document.getElementById('word-count');
 const charCountEl = document.getElementById('char-count');
 const shortcutsOverlay = document.getElementById('shortcuts-overlay');
 const shortcutsClose = document.getElementById('shortcuts-close');
+const tocSidebar = document.getElementById('toc-sidebar');
+const tocNav = document.getElementById('toc-nav');
 
 // Search state
 let searchMatches = [];
@@ -24,8 +26,10 @@ let currentHtml = '';
 let currentRaw = '';
 let currentFilePath = '';
 let currentFileName = '';
-let isSourceView = false;
+let viewMode = 'rendered'; // 'rendered' | 'source' | 'split'
 let isDirty = false;
+let currentTheme = 'light';
+let tocVisible = false;
 
 // Show error banner
 function showError(message) {
@@ -47,22 +51,121 @@ function hideError() {
 errorDismiss.addEventListener('click', hideError);
 
 // Render markdown content (receives pre-parsed and sanitized HTML from main process)
-function renderMarkdown(html) {
+async function renderMarkdown(html) {
   contentEl.innerHTML = `<article class="markdown-body">${html}</article>`;
 
   // Make external links open in default browser
-  contentEl.querySelectorAll('a').forEach(link => {
-    const href = link.getAttribute('href');
-    if (href && (href.startsWith('http://') || href.startsWith('https://'))) {
-      link.addEventListener('click', (e) => {
-        e.preventDefault();
-        window.inkwell.openExternal(href);
-      });
-    }
-  });
+  setupExternalLinks(contentEl);
+
+  // Render mermaid diagrams
+  await renderMermaidDiagrams();
 
   // Clear any existing search
   clearSearch();
+
+  // Update TOC if visible
+  if (tocVisible) {
+    buildToc();
+  }
+}
+
+// SVG Sanitizer - removes dangerous elements and attributes
+const DANGEROUS_SVG_ELEMENTS = [
+  'script', 'foreignobject', 'iframe', 'object', 'embed',
+  'use', 'image', 'animate', 'animatemotion', 'animatetransform', 'set'
+];
+
+const DANGEROUS_SVG_ATTRIBUTES = [
+  'onload', 'onerror', 'onclick', 'onmouseover', 'onmouseout', 'onmousedown',
+  'onmouseup', 'onfocus', 'onblur', 'onchange', 'onsubmit', 'onreset',
+  'onselect', 'onkeydown', 'onkeypress', 'onkeyup', 'ondblclick',
+  'oncontextmenu', 'ondrag', 'ondragend', 'ondragenter', 'ondragleave',
+  'ondragover', 'ondragstart', 'ondrop', 'onmouseenter', 'onmouseleave',
+  'onmousemove', 'onscroll', 'onwheel', 'ontouchstart', 'ontouchmove',
+  'ontouchend', 'ontouchcancel', 'onanimationstart', 'onanimationend',
+  'onanimationiteration', 'ontransitionend', 'xlink:href'
+];
+
+function sanitizeSvg(svgString) {
+  // Parse SVG in a safe way
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(svgString, 'image/svg+xml');
+
+  // Check for parsing errors
+  const parseError = doc.querySelector('parsererror');
+  if (parseError) {
+    console.warn('SVG parsing error:', parseError.textContent);
+    return '';
+  }
+
+  const svg = doc.documentElement;
+  if (!svg || svg.tagName.toLowerCase() !== 'svg') {
+    return '';
+  }
+
+  // Recursively sanitize all elements
+  function sanitizeElement(el) {
+    // Remove dangerous elements
+    const tagName = el.tagName.toLowerCase();
+    if (DANGEROUS_SVG_ELEMENTS.includes(tagName)) {
+      el.remove();
+      return;
+    }
+
+    // Remove dangerous attributes
+    const attrs = Array.from(el.attributes);
+    for (const attr of attrs) {
+      const attrName = attr.name.toLowerCase();
+      // Remove event handlers and dangerous attributes
+      if (DANGEROUS_SVG_ATTRIBUTES.includes(attrName) ||
+          attrName.startsWith('on') ||
+          (attrName === 'href' && attr.value.toLowerCase().startsWith('javascript:'))) {
+        el.removeAttribute(attr.name);
+      }
+    }
+
+    // Recursively sanitize children
+    Array.from(el.children).forEach(sanitizeElement);
+  }
+
+  sanitizeElement(svg);
+
+  // Serialize back to string
+  const serializer = new XMLSerializer();
+  return serializer.serializeToString(svg);
+}
+
+// Render mermaid diagrams in a container
+async function renderMermaidInContainer(container) {
+  const mermaidContainers = container.querySelectorAll('.mermaid-container');
+  if (mermaidContainers.length === 0) return;
+
+  for (const mContainer of mermaidContainers) {
+    const sourceEl = mContainer.querySelector('.mermaid-source');
+    const mermaidEl = mContainer.querySelector('.mermaid');
+    if (!sourceEl || !mermaidEl) continue;
+
+    const code = sourceEl.textContent;
+    try {
+      const svg = await window.inkwell.renderMermaid(code);
+      if (svg) {
+        // Sanitize SVG before inserting into DOM
+        const sanitizedSvg = sanitizeSvg(svg);
+        if (sanitizedSvg) {
+          mermaidEl.innerHTML = sanitizedSvg;
+        } else {
+          mermaidEl.innerHTML = `<div class="mermaid-error">Invalid SVG output</div>`;
+        }
+      }
+    } catch (err) {
+      mermaidEl.innerHTML = `<div class="mermaid-error">Mermaid error: ${escapeHtmlText(err.message || 'Failed to render diagram')}<pre>${escapeHtmlText(code)}</pre></div>`;
+    }
+  }
+}
+
+// Render mermaid diagrams in main content
+async function renderMermaidDiagrams() {
+  await renderMermaidInContainer(contentEl);
 }
 
 // Render raw source view (editable)
@@ -99,21 +202,32 @@ function setDirty(dirty) {
   updateTitle();
 }
 
+// Update body classes based on view mode
+function updateViewModeClasses() {
+  document.body.classList.toggle('split-mode', viewMode === 'split');
+  document.body.classList.toggle('source-mode', viewMode === 'source');
+}
+
 // Render current view based on mode
 function renderCurrentView() {
-  if (isSourceView) {
+  updateViewModeClasses();
+  if (viewMode === 'source') {
     renderSource(currentRaw);
+  } else if (viewMode === 'split') {
+    renderSplitView();
   } else {
     renderMarkdown(currentHtml);
   }
+  updateTocVisibility();
 }
 
 // Toggle between rendered and source view
 async function toggleViewSource() {
-  if (!currentRaw && !isSourceView) return; // No file loaded
+  if (!currentRaw && viewMode === 'rendered') return; // No file loaded
+  if (viewMode === 'split') return; // Don't toggle in split mode
 
   // If switching from source to rendered, capture edits and re-parse
-  if (isSourceView) {
+  if (viewMode === 'source') {
     const editor = document.getElementById('source-editor');
     if (editor) {
       const editedContent = editor.value;
@@ -123,27 +237,345 @@ async function toggleViewSource() {
         currentHtml = await window.inkwell.parseMarkdown(editedContent);
       }
     }
+    viewMode = 'rendered';
+  } else {
+    viewMode = 'source';
   }
 
-  isSourceView = !isSourceView;
-  window.inkwell.setViewMode(isSourceView);
+  window.inkwell.setViewMode(viewMode);
   const scrollY = window.scrollY;
   renderCurrentView();
   window.scrollTo(0, scrollY);
 }
 
-// Dark mode handling
-function setDarkMode(enabled) {
-  if (enabled) {
-    document.body.classList.add('dark');
-  } else {
-    document.body.classList.remove('dark');
+// Toggle split view
+async function toggleSplitView() {
+  if (!currentRaw) return; // No file loaded
+
+  // If coming from source view, capture edits first
+  if (viewMode === 'source') {
+    const editor = document.getElementById('source-editor');
+    if (editor) {
+      const editedContent = editor.value;
+      if (editedContent !== currentRaw) {
+        currentRaw = editedContent;
+        currentHtml = await window.inkwell.parseMarkdown(editedContent);
+      }
+    }
+  }
+
+  viewMode = viewMode === 'split' ? 'rendered' : 'split';
+  window.inkwell.setViewMode(viewMode);
+  renderCurrentView();
+}
+
+// Render split view with source and preview side by side
+function renderSplitView() {
+  const splitContainer = document.createElement('div');
+  splitContainer.className = 'split-container';
+
+  // Source pane
+  const sourcePane = document.createElement('div');
+  sourcePane.className = 'split-pane split-source';
+  const textarea = document.createElement('textarea');
+  textarea.className = 'source-view split-editor';
+  textarea.id = 'source-editor';
+  textarea.value = currentRaw;
+  textarea.spellcheck = false;
+  sourcePane.appendChild(textarea);
+
+  // Divider
+  const divider = document.createElement('div');
+  divider.className = 'split-divider';
+
+  // Preview pane
+  const previewPane = document.createElement('div');
+  previewPane.className = 'split-pane split-preview';
+  previewPane.innerHTML = `<article class="markdown-body">${currentHtml}</article>`;
+
+  splitContainer.appendChild(sourcePane);
+  splitContainer.appendChild(divider);
+  splitContainer.appendChild(previewPane);
+
+  contentEl.innerHTML = '';
+  contentEl.appendChild(splitContainer);
+
+  // Set up live preview with debounce (500ms for better performance on large docs)
+  let previewDebounce = null;
+  let isUpdatingPreview = false;
+
+  textarea.addEventListener('input', () => {
+    if (!isDirty) {
+      setDirty(true);
+    }
+    if (previewDebounce) clearTimeout(previewDebounce);
+
+    // Show updating indicator for large content
+    if (textarea.value.length > 5000 && !isUpdatingPreview) {
+      previewPane.style.opacity = '0.7';
+    }
+
+    previewDebounce = setTimeout(async () => {
+      isUpdatingPreview = true;
+      const editedContent = textarea.value;
+      currentRaw = editedContent;
+
+      try {
+        currentHtml = await window.inkwell.parseMarkdown(editedContent);
+        previewPane.innerHTML = `<article class="markdown-body">${currentHtml}</article>`;
+        previewPane.style.opacity = '';
+        setupExternalLinks(previewPane);
+
+        // Render mermaid in preview pane (only if there are mermaid blocks)
+        if (currentHtml.includes('mermaid-container')) {
+          await renderMermaidInContainer(previewPane);
+        }
+
+        updateStatusBar();
+
+        // Rebuild TOC using requestIdleCallback if available (non-blocking)
+        if (tocVisible) {
+          if (window.requestIdleCallback) {
+            requestIdleCallback(() => buildToc(), { timeout: 1000 });
+          } else {
+            buildToc();
+          }
+        }
+      } finally {
+        isUpdatingPreview = false;
+        previewPane.style.opacity = '';
+      }
+    }, 500);
+  });
+
+  // Set up resizable divider
+  setupDividerResize(divider, sourcePane, previewPane);
+
+  // Setup external links in preview
+  setupExternalLinks(previewPane);
+
+  clearSearch();
+}
+
+// Allowed URL schemes for external links
+const ALLOWED_EXTERNAL_SCHEMES = ['http:', 'https:'];
+const ALLOWED_LINK_SCHEMES = ['http:', 'https:', 'mailto:'];
+
+function isAllowedLinkScheme(href) {
+  if (!href) return false;
+  try {
+    // Relative URLs and anchors are safe for in-page navigation
+    if (href.startsWith('#')) return true;
+    const url = new URL(href, 'http://example.com');
+    return ALLOWED_LINK_SCHEMES.includes(url.protocol);
+  } catch {
+    return href.startsWith('#');
   }
 }
 
-// Listen for preferences changes from main process
-window.inkwell.onPreferencesChanged(({ darkMode }) => {
-  setDarkMode(darkMode);
+function isExternalLink(href) {
+  if (!href) return false;
+  try {
+    const url = new URL(href, 'http://example.com');
+    return ALLOWED_EXTERNAL_SCHEMES.includes(url.protocol);
+  } catch {
+    return false;
+  }
+}
+
+// Make links safe - prevent dangerous schemes, open external links in browser
+function setupExternalLinks(container) {
+  container.querySelectorAll('a').forEach(link => {
+    const href = link.getAttribute('href');
+
+    // Always prevent default to block any navigation
+    link.addEventListener('click', (e) => {
+      e.preventDefault();
+
+      if (!href || !isAllowedLinkScheme(href)) {
+        // Block dangerous schemes silently
+        console.warn('Blocked navigation to disallowed URL:', href);
+        return;
+      }
+
+      if (href.startsWith('#')) {
+        // In-page anchor - scroll to element
+        const targetId = href.slice(1);
+        const target = document.getElementById(targetId);
+        if (target) {
+          target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+        return;
+      }
+
+      if (isExternalLink(href)) {
+        // Open http/https in external browser
+        window.inkwell.openExternal(href);
+      } else if (href.startsWith('mailto:')) {
+        // Open mailto in external handler
+        window.inkwell.openExternal(href);
+      }
+    });
+  });
+}
+
+// Setup divider drag to resize panes
+function setupDividerResize(divider, leftPane, rightPane) {
+  let isDragging = false;
+  let startX = 0;
+  let leftWidth = 0;
+
+  divider.addEventListener('mousedown', (e) => {
+    isDragging = true;
+    startX = e.clientX;
+    leftWidth = leftPane.offsetWidth;
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  });
+
+  document.addEventListener('mousemove', (e) => {
+    if (!isDragging) return;
+    const delta = e.clientX - startX;
+    const newWidth = Math.max(200, Math.min(leftWidth + delta, window.innerWidth - 250));
+    leftPane.style.width = newWidth + 'px';
+    leftPane.style.flex = 'none';
+  });
+
+  document.addEventListener('mouseup', () => {
+    if (isDragging) {
+      isDragging = false;
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    }
+  });
+}
+
+// Theme handling
+function setTheme(theme) {
+  currentTheme = theme;
+  document.body.setAttribute('data-theme', theme);
+  // Also update the legacy dark class for backwards compatibility
+  document.body.classList.toggle('dark', theme === 'dark' || theme === 'solarized-dark');
+}
+
+// Listen for theme changes from main process
+window.inkwell.onThemeChanged(({ theme }) => {
+  setTheme(theme);
+});
+
+// Listen for TOC visibility changes from main process
+window.inkwell.onTocVisibilityChanged(({ visible }) => {
+  tocVisible = visible;
+  updateTocVisibility();
+});
+
+// Update TOC visibility
+function updateTocVisibility() {
+  if (tocSidebar) {
+    const shouldHide = !tocVisible || viewMode === 'source' || viewMode === 'split';
+    tocSidebar.classList.toggle('hidden', shouldHide);
+  }
+  // Also update body class for layout adjustment
+  document.body.classList.toggle('toc-open', tocVisible && viewMode === 'rendered');
+}
+
+// Build Table of Contents from headings
+let tocObserver = null;
+
+function buildToc() {
+  if (!tocNav) return;
+
+  const markdownBody = contentEl.querySelector('.markdown-body');
+  if (!markdownBody) {
+    tocNav.innerHTML = '<ul class="toc-list"><li class="toc-empty">No headings found</li></ul>';
+    return;
+  }
+
+  const headings = markdownBody.querySelectorAll('h1, h2, h3, h4, h5, h6');
+  if (headings.length === 0) {
+    tocNav.innerHTML = '<ul class="toc-list"><li class="toc-empty">No headings found</li></ul>';
+    return;
+  }
+
+  // Clear existing TOC and create proper list structure
+  const ul = document.createElement('ul');
+  ul.className = 'toc-list';
+
+  // Build TOC list
+  headings.forEach((heading, index) => {
+    // Add an ID to the heading if it doesn't have one
+    if (!heading.id) {
+      heading.id = `heading-${index}`;
+    }
+
+    const li = document.createElement('li');
+    const a = document.createElement('a');
+    a.href = `#${heading.id}`;
+    a.textContent = heading.textContent;
+    a.className = `toc-${heading.tagName.toLowerCase()}`;
+    a.setAttribute('data-heading-id', heading.id);
+
+    a.addEventListener('click', (e) => {
+      e.preventDefault();
+      heading.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      // Update active state
+      tocNav.querySelectorAll('a').forEach(link => link.classList.remove('active'));
+      a.classList.add('active');
+    });
+
+    li.appendChild(a);
+    ul.appendChild(li);
+  });
+
+  tocNav.innerHTML = '';
+  tocNav.appendChild(ul);
+
+  // Set up scroll spy
+  setupScrollSpy(headings);
+}
+
+// Set up IntersectionObserver for scroll spy
+function setupScrollSpy(headings) {
+  // Clean up previous observer
+  if (tocObserver) {
+    tocObserver.disconnect();
+  }
+
+  const options = {
+    root: null,
+    rootMargin: '-80px 0px -70% 0px',
+    threshold: 0
+  };
+
+  tocObserver = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        const id = entry.target.id;
+        tocNav.querySelectorAll('a').forEach(link => {
+          link.classList.toggle('active', link.getAttribute('data-heading-id') === id);
+        });
+      }
+    });
+  }, options);
+
+  headings.forEach(heading => {
+    tocObserver.observe(heading);
+  });
+}
+
+// Toggle TOC visibility
+function toggleToc() {
+  tocVisible = !tocVisible;
+  window.inkwell.setTocVisible(tocVisible);
+  updateTocVisibility();
+  if (tocVisible && viewMode === 'rendered') {
+    buildToc();
+  }
+}
+
+// Listen for toggle-toc from menu
+window.inkwell.onToggleToc(() => {
+  toggleToc();
 });
 
 // Listen for file opened from main process
@@ -152,24 +584,81 @@ window.inkwell.onFileOpened(({ html, raw, fileName, filePath }) => {
   currentRaw = raw;
   currentFilePath = filePath;
   currentFileName = fileName;
-  isSourceView = false; // Reset to rendered view on new file
+  viewMode = 'rendered'; // Reset to rendered view on new file
   setDirty(false);
-  window.inkwell.setViewMode(false);
+  window.inkwell.setViewMode('rendered');
   renderMarkdown(html);
   updateStatusBar();
 });
 
 // Listen for file changed (live reload)
 window.inkwell.onFileChanged(({ html, raw }) => {
+  // If there are unsaved changes, show conflict banner instead of auto-reloading
+  if (isDirty) {
+    showConflictBanner(html, raw);
+    return;
+  }
+
   currentHtml = html;
   currentRaw = raw;
-  setDirty(false);
   // Preserve scroll position
   const scrollY = window.scrollY;
   renderCurrentView();
   window.scrollTo(0, scrollY);
   updateStatusBar();
 });
+
+// Show conflict resolution banner when file changes externally with unsaved edits
+let pendingExternalHtml = null;
+let pendingExternalRaw = null;
+
+function showConflictBanner(html, raw) {
+  pendingExternalHtml = html;
+  pendingExternalRaw = raw;
+
+  // Create conflict banner if it doesn't exist
+  let conflictBanner = document.getElementById('conflict-banner');
+  if (!conflictBanner) {
+    conflictBanner = document.createElement('div');
+    conflictBanner.id = 'conflict-banner';
+    conflictBanner.className = 'conflict-banner';
+    conflictBanner.innerHTML = `
+      <span class="conflict-message">File changed on disk. You have unsaved changes.</span>
+      <button id="conflict-reload" class="conflict-btn">Reload from disk</button>
+      <button id="conflict-keep" class="conflict-btn conflict-btn-primary">Keep my changes</button>
+    `;
+    document.body.insertBefore(conflictBanner, document.body.firstChild.nextSibling.nextSibling);
+
+    document.getElementById('conflict-reload').addEventListener('click', () => {
+      hideConflictBanner();
+      if (pendingExternalHtml !== null) {
+        currentHtml = pendingExternalHtml;
+        currentRaw = pendingExternalRaw;
+        setDirty(false);
+        renderCurrentView();
+        updateStatusBar();
+      }
+      pendingExternalHtml = null;
+      pendingExternalRaw = null;
+    });
+
+    document.getElementById('conflict-keep').addEventListener('click', () => {
+      hideConflictBanner();
+      // Keep current edits, discard external changes
+      pendingExternalHtml = null;
+      pendingExternalRaw = null;
+    });
+  }
+
+  conflictBanner.classList.remove('hidden');
+}
+
+function hideConflictBanner() {
+  const conflictBanner = document.getElementById('conflict-banner');
+  if (conflictBanner) {
+    conflictBanner.classList.add('hidden');
+  }
+}
 
 // Listen for file deleted
 window.inkwell.onFileDeleted(({ filePath }) => {
@@ -215,9 +704,9 @@ document.addEventListener('drop', async (e) => {
           currentRaw = result.raw;
           currentFilePath = result.filePath;
           currentFileName = result.fileName;
-          isSourceView = false;
+          viewMode = 'rendered';
           setDirty(false);
-          window.inkwell.setViewMode(false);
+          window.inkwell.setViewMode('rendered');
           renderMarkdown(result.html);
           updateStatusBar();
         }
@@ -266,6 +755,7 @@ function clearSearch() {
 }
 
 // Perform search using text node walking (XSS-safe, no innerHTML)
+// Uses chunked processing for large documents to prevent UI freezing
 function performSearch(query) {
   clearSearch();
 
@@ -295,50 +785,78 @@ function performSearch(query) {
     textNodes.push(node);
   }
 
-  // Process each text node
-  textNodes.forEach(textNode => {
-    const text = textNode.textContent;
-    const lowerText = text.toLowerCase();
-    let lastIndex = 0;
-    const fragments = [];
-    let matchIndex = lowerText.indexOf(normalizedQuery, lastIndex);
+  // Process text nodes in chunks for large documents
+  const CHUNK_SIZE = 100;
+  let currentIndex = 0;
 
-    while (matchIndex !== -1) {
-      // Add text before match
-      if (matchIndex > lastIndex) {
-        fragments.push(document.createTextNode(text.slice(lastIndex, matchIndex)));
+  function processChunk() {
+    const endIndex = Math.min(currentIndex + CHUNK_SIZE, textNodes.length);
+
+    for (let i = currentIndex; i < endIndex; i++) {
+      const textNode = textNodes[i];
+      const text = textNode.textContent;
+      const lowerText = text.toLowerCase();
+      let lastIndex = 0;
+      const fragments = [];
+      let matchIndex = lowerText.indexOf(normalizedQuery, lastIndex);
+
+      while (matchIndex !== -1) {
+        // Add text before match
+        if (matchIndex > lastIndex) {
+          fragments.push(document.createTextNode(text.slice(lastIndex, matchIndex)));
+        }
+
+        // Create mark element for match
+        const mark = document.createElement('mark');
+        mark.className = 'search-highlight';
+        mark.textContent = text.slice(matchIndex, matchIndex + query.length);
+        fragments.push(mark);
+        searchMatches.push(mark);
+
+        lastIndex = matchIndex + query.length;
+        matchIndex = lowerText.indexOf(normalizedQuery, lastIndex);
       }
 
-      // Create mark element for match
-      const mark = document.createElement('mark');
-      mark.className = 'search-highlight';
-      mark.textContent = text.slice(matchIndex, matchIndex + query.length);
-      fragments.push(mark);
-      searchMatches.push(mark);
+      // Add remaining text
+      if (lastIndex < text.length) {
+        fragments.push(document.createTextNode(text.slice(lastIndex)));
+      }
 
-      lastIndex = matchIndex + query.length;
-      matchIndex = lowerText.indexOf(normalizedQuery, lastIndex);
+      // Replace text node with fragments if matches found in this node
+      if (fragments.length > 0 && fragments.some(f => f.nodeName === 'MARK')) {
+        const parent = textNode.parentNode;
+        if (parent) {
+          fragments.forEach(fragment => {
+            parent.insertBefore(fragment, textNode);
+          });
+          parent.removeChild(textNode);
+        }
+      }
     }
 
-    // Add remaining text
-    if (lastIndex < text.length) {
-      fragments.push(document.createTextNode(text.slice(lastIndex)));
-    }
+    currentIndex = endIndex;
 
-    // Replace text node with fragments if matches found
-    if (fragments.length > 0 && searchMatches.length > 0 && fragments.some(f => f.nodeName === 'MARK')) {
-      const parent = textNode.parentNode;
-      fragments.forEach(fragment => {
-        parent.insertBefore(fragment, textNode);
-      });
-      parent.removeChild(textNode);
+    // Continue processing if there are more nodes
+    if (currentIndex < textNodes.length) {
+      // Use requestAnimationFrame to yield to the browser
+      requestAnimationFrame(processChunk);
+    } else {
+      // Done processing - update count and navigate to first match
+      updateSearchCount();
+      if (searchMatches.length > 0) {
+        navigateToMatch(0);
+      }
     }
-  });
+  }
 
-  // Update count and navigate to first match
-  updateSearchCount();
-  if (searchMatches.length > 0) {
-    navigateToMatch(0);
+  // Start processing (for small docs, this completes synchronously in one chunk)
+  if (textNodes.length <= CHUNK_SIZE) {
+    // Small document - process synchronously
+    processChunk();
+  } else {
+    // Large document - show progress and process in chunks
+    searchCount.textContent = 'Searching...';
+    requestAnimationFrame(processChunk);
   }
 }
 
@@ -400,14 +918,29 @@ function prevMatch() {
   }
 }
 
-// Search input handler with debounce
+// Search input handler with debounce and minimum query length
 searchInput.addEventListener('input', () => {
   if (searchDebounceTimer) {
     clearTimeout(searchDebounceTimer);
   }
+
+  const query = searchInput.value;
+
+  // Require minimum 2 characters to search (reduces CPU usage on large docs)
+  if (query.length > 0 && query.length < 2) {
+    searchCount.textContent = 'Type 2+ chars';
+    return;
+  }
+
+  // Use longer debounce (250ms) to reduce CPU usage during rapid typing
   searchDebounceTimer = setTimeout(() => {
-    performSearch(searchInput.value);
-  }, 150);
+    // Use requestIdleCallback if available for non-blocking search
+    if (window.requestIdleCallback) {
+      requestIdleCallback(() => performSearch(query), { timeout: 500 });
+    } else {
+      performSearch(query);
+    }
+  }, 250);
 });
 
 // Search keyboard navigation
@@ -447,8 +980,8 @@ async function saveFile() {
     return;
   }
 
-  if (!isSourceView) {
-    showError('Switch to source view (Cmd+U) to edit and save.');
+  if (viewMode === 'rendered') {
+    showError('Switch to source view (Cmd+U) or split view (Cmd+Shift+S) to edit and save.');
     return;
   }
 
@@ -485,13 +1018,22 @@ window.inkwell.onSaveAndClose(async () => {
   }
 });
 
+// Listen for save-before-open from main process (when opening a new file with unsaved changes)
+window.inkwell.onSaveBeforeOpen(async ({ pendingFilePath }) => {
+  const saved = await saveCurrentContent();
+  if (saved) {
+    // Now open the new file
+    await window.inkwell.openFileAfterSave(pendingFilePath);
+  }
+});
+
 // Save current content (works from any view)
 async function saveCurrentContent() {
   if (!currentFilePath) return false;
 
-  // If in source view, get content from editor
+  // If in source or split view, get content from editor
   let content = currentRaw;
-  if (isSourceView) {
+  if (viewMode === 'source' || viewMode === 'split') {
     const editor = document.getElementById('source-editor');
     if (editor) {
       content = editor.value;
@@ -579,8 +1121,18 @@ window.inkwell.onExportHTML(async ({ filePath }) => {
 });
 
 function generateExportHTML() {
-  const darkMode = document.body.classList.contains('dark');
+  const isDark = currentTheme === 'dark' || currentTheme === 'solarized-dark';
   const title = currentFileName || 'Document';
+
+  // Theme-specific colors
+  const themeColors = {
+    'light': { text: '#37352f', bg: '#ffffff', bgCode: '#f7f6f3', border: '#e9e9e7', link: '#0077aa', textSecondary: '#6b6b6b' },
+    'dark': { text: '#e0e0e0', bg: '#1a1a1a', bgCode: '#2d2d2d', border: '#3a3a3a', link: '#4fc3f7', textSecondary: '#a0a0a0' },
+    'sepia': { text: '#5c4b37', bg: '#f5f0e6', bgCode: '#e8e2d4', border: '#d4cec2', link: '#8b5a2b', textSecondary: '#7a6a56' },
+    'solarized-light': { text: '#657b83', bg: '#fdf6e3', bgCode: '#eee8d5', border: '#d3cbb7', link: '#268bd2', textSecondary: '#839496' },
+    'solarized-dark': { text: '#839496', bg: '#002b36', bgCode: '#073642', border: '#094656', link: '#2aa198', textSecondary: '#93a1a1' }
+  };
+  const colors = themeColors[currentTheme] || themeColors['light'];
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -593,24 +1145,24 @@ function generateExportHTML() {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
       font-size: 16px;
       line-height: 1.7;
-      color: ${darkMode ? '#e0e0e0' : '#37352f'};
-      background: ${darkMode ? '#1a1a1a' : '#ffffff'};
+      color: ${colors.text};
+      background: ${colors.bg};
       max-width: 720px;
       margin: 0 auto;
       padding: 40px;
     }
     h1, h2, h3, h4, h5, h6 { font-family: Georgia, serif; font-weight: 600; margin-top: 1.5em; }
-    h1 { font-size: 2.25rem; border-bottom: 1px solid ${darkMode ? '#3a3a3a' : '#e9e9e7'}; padding-bottom: 0.3em; }
-    h2 { font-size: 1.75rem; border-bottom: 1px solid ${darkMode ? '#3a3a3a' : '#e9e9e7'}; padding-bottom: 0.2em; }
-    a { color: ${darkMode ? '#4fc3f7' : '#0077aa'}; text-decoration: none; }
+    h1 { font-size: 2.25rem; border-bottom: 1px solid ${colors.border}; padding-bottom: 0.3em; }
+    h2 { font-size: 1.75rem; border-bottom: 1px solid ${colors.border}; padding-bottom: 0.2em; }
+    a { color: ${colors.link}; text-decoration: none; }
     a:hover { text-decoration: underline; }
-    code { font-family: 'SF Mono', Monaco, monospace; background: ${darkMode ? '#2d2d2d' : '#f7f6f3'}; padding: 0.2em 0.4em; border-radius: 4px; }
-    pre { background: ${darkMode ? '#2d2d2d' : '#f7f6f3'}; padding: 1em; border-radius: 6px; overflow-x: auto; }
+    code { font-family: 'SF Mono', Monaco, monospace; background: ${colors.bgCode}; padding: 0.2em 0.4em; border-radius: 4px; }
+    pre { background: ${colors.bgCode}; padding: 1em; border-radius: 6px; overflow-x: auto; }
     pre code { background: none; padding: 0; }
-    blockquote { margin: 1em 0; padding: 0.5em 1em; border-left: 3px solid ${darkMode ? '#3a3a3a' : '#e9e9e7'}; color: ${darkMode ? '#a0a0a0' : '#6b6b6b'}; }
+    blockquote { margin: 1em 0; padding: 0.5em 1em; border-left: 3px solid ${colors.border}; color: ${colors.textSecondary}; }
     table { border-collapse: collapse; width: 100%; margin: 1em 0; }
-    th, td { padding: 10px 14px; border: 1px solid ${darkMode ? '#3a3a3a' : '#e9e9e7'}; text-align: left; }
-    th { background: ${darkMode ? '#252525' : '#f7f6f3'}; }
+    th, td { padding: 10px 14px; border: 1px solid ${colors.border}; text-align: left; }
+    th { background: ${colors.bgCode}; }
     img { max-width: 100%; }
   </style>
 </head>
@@ -626,12 +1178,23 @@ function escapeHtmlText(text) {
   return div.innerHTML;
 }
 
-// Initialize dark mode on load
+// Listen for toggle-split-view from main process
+window.inkwell.onToggleSplitView(() => {
+  toggleSplitView();
+});
+
+// Initialize theme on load
 (async function init() {
   try {
     const prefs = await window.inkwell.getPreferences();
-    if (prefs && prefs.darkMode) {
-      setDarkMode(true);
+    if (prefs) {
+      if (prefs.theme) {
+        setTheme(prefs.theme);
+      }
+      if (prefs.tocVisible !== undefined) {
+        tocVisible = prefs.tocVisible;
+        updateTocVisibility();
+      }
     }
   } catch (err) {
     console.error('Failed to load preferences:', err);

@@ -3,12 +3,22 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' https: data:;">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' https: data: file:; object-src 'none'; base-uri 'none'; form-action 'none';">
   <title>Inkwell</title>
+  <link rel="stylesheet" href="katex.min.css">
   <link rel="stylesheet" href="styles.css">
 </head>
-<body>
+<body data-theme="light">
   <div class="drag-region"></div>
+
+  <aside id="toc-sidebar" class="hidden">
+    <h3>Contents</h3>
+    <nav id="toc-nav" class="toc-nav" aria-label="Table of contents">
+      <ul class="toc-list">
+        <li class="toc-empty">No headings found</li>
+      </ul>
+    </nav>
+  </aside>
 
   <div id="search-bar" class="search-bar hidden">
     <input type="text" id="search-input" placeholder="Find in document..." autocomplete="off" spellcheck="false">
@@ -62,8 +72,9 @@
         </div>
         <div class="shortcuts-section">
           <h3>View</h3>
+          <div class="shortcut-row"><span class="shortcut-keys">Cmd+T</span><span>Toggle table of contents</span></div>
+          <div class="shortcut-row"><span class="shortcut-keys">Cmd+Shift+S</span><span>Toggle split view</span></div>
           <div class="shortcut-row"><span class="shortcut-keys">Cmd+U</span><span>Toggle source view</span></div>
-          <div class="shortcut-row"><span class="shortcut-keys">Cmd+D</span><span>Toggle dark mode</span></div>
           <div class="shortcut-row"><span class="shortcut-keys">Cmd++</span><span>Zoom in</span></div>
           <div class="shortcut-row"><span class="shortcut-keys">Cmd+-</span><span>Zoom out</span></div>
           <div class="shortcut-row"><span class="shortcut-keys">Cmd+0</span><span>Reset zoom</span></div>

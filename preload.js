@@ -23,9 +23,27 @@ contextBridge.exposeInMainWorld('inkwell', {
     });
   },
 
-  onPreferencesChanged: (callback) => {
-    ipcRenderer.on('preferences-changed', (event, data) => {
+  onThemeChanged: (callback) => {
+    ipcRenderer.on('theme-changed', (event, data) => {
       callback(data);
+    });
+  },
+
+  onTocVisibilityChanged: (callback) => {
+    ipcRenderer.on('toc-visibility-changed', (event, data) => {
+      callback(data);
+    });
+  },
+
+  onToggleToc: (callback) => {
+    ipcRenderer.on('toggle-toc', () => {
+      callback();
+    });
+  },
+
+  onToggleSplitView: (callback) => {
+    ipcRenderer.on('toggle-split-view', () => {
+      callback();
     });
   },
 
@@ -65,6 +83,20 @@ contextBridge.exposeInMainWorld('inkwell', {
     });
   },
 
+  onSaveBeforeOpen: (callback) => {
+    ipcRenderer.on('save-before-open', (event, data) => {
+      callback(data);
+    });
+  },
+
+  openFileAfterSave: async (filePath) => {
+    return await ipcRenderer.invoke('open-file-after-save', filePath);
+  },
+
+  checkDirtyState: async () => {
+    return await ipcRenderer.invoke('check-dirty-state');
+  },
+
   onExportHTML: (callback) => {
     ipcRenderer.on('export-html', (event, data) => {
       callback(data);
@@ -102,9 +134,14 @@ contextBridge.exposeInMainWorld('inkwell', {
     return ipcRenderer.invoke('get-preferences');
   },
 
-  // Toggle dark mode
-  toggleDarkMode: () => {
-    return ipcRenderer.invoke('toggle-dark-mode');
+  // Set theme
+  setTheme: (theme) => {
+    return ipcRenderer.invoke('set-theme', theme);
+  },
+
+  // Set TOC visibility
+  setTocVisible: (visible) => {
+    return ipcRenderer.invoke('set-toc-visible', visible);
   },
 
   // Clear recent files
@@ -128,5 +165,9 @@ contextBridge.exposeInMainWorld('inkwell', {
     } else {
       console.warn('Blocked opening URL with disallowed scheme:', url);
     }
+  },
+
+  renderMermaid: async (code) => {
+    return await ipcRenderer.invoke('render-mermaid', code);
   }
 });

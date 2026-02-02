@@ -1,6 +1,6 @@
 {
   "name": "inkwell",
-  "version": "1.3.0",
+  "version": "2.0.0",
   "description": "A beautiful, minimal Markdown viewer for macOS",
   "main": "main.js",
   "scripts": {
@@ -13,8 +13,10 @@
     "chokidar": "^3.6.0",
     "electron-store": "^8.2.0",
     "highlight.js": "^11.9.0",
+    "katex": "^0.16.9",
     "marked": "^12.0.0",
-    "marked-highlight": "^2.1.0"
+    "marked-highlight": "^2.1.0",
+    "mermaid": "^10.9.0"
   },
   "devDependencies": {
     "electron": "^29.0.0",
