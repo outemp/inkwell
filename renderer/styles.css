@@ -136,6 +136,28 @@ mark.search-highlight.current {
   background: var(--search-highlight-current);
 }
 
+/* Source view (editable textarea) */
+.source-view {
+  font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, monospace;
+  font-size: 0.875rem;
+  line-height: 1.6;
+  background: var(--bg-code);
+  color: var(--text-primary);
+  padding: 1em;
+  border-radius: 6px;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  width: 100%;
+  min-height: calc(100vh - 160px);
+  border: 1px solid var(--border-color);
+  resize: none;
+  outline: none;
+}
+
+.source-view:focus {
+  border-color: var(--accent-color);
+}
+
 /* Main content area */
 #content {
   max-width: 720px;

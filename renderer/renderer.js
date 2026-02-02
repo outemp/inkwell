@@ -14,6 +14,14 @@ let searchMatches = [];
 let currentMatchIndex = -1;
 let searchDebounceTimer = null;
 
+// View state
+let currentHtml = '';
+let currentRaw = '';
+let currentFilePath = '';
+let currentFileName = '';
+let isSourceView = false;
+let isDirty = false;
+
 // Show error banner
 function showError(message) {
   errorMessage.textContent = message;
@@ -52,6 +60,73 @@ function renderMarkdown(html) {
   clearSearch();
 }
 
+// Render raw source view (editable)
+function renderSource(raw) {
+  const textarea = document.createElement('textarea');
+  textarea.className = 'source-view';
+  textarea.id = 'source-editor';
+  textarea.value = raw;
+  textarea.spellcheck = false;
+
+  // Track changes for dirty state
+  textarea.addEventListener('input', () => {
+    if (!isDirty) {
+      setDirty(true);
+    }
+  });
+
+  contentEl.innerHTML = '';
+  contentEl.appendChild(textarea);
+  clearSearch();
+}
+
+// Update document title with dirty indicator
+function updateTitle() {
+  if (!currentFileName) return;
+  const dirtyIndicator = isDirty ? '• ' : '';
+  document.title = `${dirtyIndicator}${currentFileName} - Inkwell`;
+}
+
+// Set dirty state and notify main process
+function setDirty(dirty) {
+  isDirty = dirty;
+  window.inkwell.setDirty(dirty);
+  updateTitle();
+}
+
+// Render current view based on mode
+function renderCurrentView() {
+  if (isSourceView) {
+    renderSource(currentRaw);
+  } else {
+    renderMarkdown(currentHtml);
+  }
+}
+
+// Toggle between rendered and source view
+async function toggleViewSource() {
+  if (!currentRaw && !isSourceView) return; // No file loaded
+
+  // If switching from source to rendered, capture edits and re-parse
+  if (isSourceView) {
+    const editor = document.getElementById('source-editor');
+    if (editor) {
+      const editedContent = editor.value;
+      if (editedContent !== currentRaw) {
+        currentRaw = editedContent;
+        // Re-parse the markdown
+        currentHtml = await window.inkwell.parseMarkdown(editedContent);
+      }
+    }
+  }
+
+  isSourceView = !isSourceView;
+  window.inkwell.setViewMode(isSourceView);
+  const scrollY = window.scrollY;
+  renderCurrentView();
+  window.scrollTo(0, scrollY);
+}
+
 // Dark mode handling
 function setDarkMode(enabled) {
   if (enabled) {
@@ -67,15 +142,25 @@ window.inkwell.onPreferencesChanged(({ darkMode }) => {
 });
 
 // Listen for file opened from main process
-window.inkwell.onFileOpened(({ html, fileName }) => {
+window.inkwell.onFileOpened(({ html, raw, fileName, filePath }) => {
+  currentHtml = html;
+  currentRaw = raw;
+  currentFilePath = filePath;
+  currentFileName = fileName;
+  isSourceView = false; // Reset to rendered view on new file
+  setDirty(false);
+  window.inkwell.setViewMode(false);
   renderMarkdown(html);
 });
 
 // Listen for file changed (live reload)
-window.inkwell.onFileChanged(({ html }) => {
+window.inkwell.onFileChanged(({ html, raw }) => {
+  currentHtml = html;
+  currentRaw = raw;
+  setDirty(false);
   // Preserve scroll position
   const scrollY = window.scrollY;
-  renderMarkdown(html);
+  renderCurrentView();
   window.scrollTo(0, scrollY);
 });
 
@@ -119,6 +204,13 @@ document.addEventListener('drop', async (e) => {
         if (result.error) {
           showError(result.error);
         } else if (result.html) {
+          currentHtml = result.html;
+          currentRaw = result.raw;
+          currentFilePath = result.filePath;
+          currentFileName = result.fileName;
+          isSourceView = false;
+          setDirty(false);
+          window.inkwell.setViewMode(false);
           renderMarkdown(result.html);
         }
       }
@@ -334,6 +426,78 @@ searchClose.addEventListener('click', closeSearch);
 window.inkwell.onToggleFind(() => {
   toggleSearch();
 });
+
+// Listen for toggle-view-source from main process (Cmd+U)
+window.inkwell.onToggleViewSource(() => {
+  toggleViewSource();
+});
+
+// Save file handler
+async function saveFile() {
+  if (!currentFilePath) {
+    showError('No file to save.');
+    return;
+  }
+
+  if (!isSourceView) {
+    showError('Switch to source view (Cmd+U) to edit and save.');
+    return;
+  }
+
+  const editor = document.getElementById('source-editor');
+  if (!editor) return;
+
+  const content = editor.value;
+  const result = await window.inkwell.saveFile(currentFilePath, content);
+
+  if (result.error) {
+    showError(result.error);
+    return false;
+  } else {
+    // Update current raw content
+    currentRaw = content;
+    setDirty(false);
+    // File watcher will trigger reload with new HTML
+    return true;
+  }
+}
+
+// Listen for save-file from main process (Cmd+S)
+window.inkwell.onSaveFile(() => {
+  saveFile();
+});
+
+// Listen for save-and-close from main process (when closing with unsaved changes)
+window.inkwell.onSaveAndClose(async () => {
+  // If in rendered view, need to switch to source to get current content
+  // Or we can just save currentRaw directly
+  const saved = await saveCurrentContent();
+  if (saved) {
+    window.close();
+  }
+});
+
+// Save current content (works from any view)
+async function saveCurrentContent() {
+  if (!currentFilePath) return false;
+
+  // If in source view, get content from editor
+  let content = currentRaw;
+  if (isSourceView) {
+    const editor = document.getElementById('source-editor');
+    if (editor) {
+      content = editor.value;
+    }
+  }
+
+  const result = await window.inkwell.saveFile(currentFilePath, content);
+  if (result.error) {
+    showError(result.error);
+    return false;
+  }
+  setDirty(false);
+  return true;
+}
 
 // Global Escape key handler
 document.addEventListener('keydown', (e) => {

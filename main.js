@@ -63,6 +63,8 @@ let fileToOpen = null;
 let currentFilePath = null;
 let fileWatcher = null;
 let debounceTimer = null;
+let isSourceView = false;
+let isDirty = false;
 
 // Allowed file extensions
 const ALLOWED_EXTENSIONS = ['.md', '.markdown'];
@@ -146,7 +148,7 @@ async function reloadCurrentFile() {
   try {
     const content = await fs.readFile(currentFilePath, 'utf-8');
     const html = parseMarkdown(content);
-    mainWindow.webContents.send('file-changed', { html });
+    mainWindow.webContents.send('file-changed', { html, raw: content });
   } catch (err) {
     console.error('Error reloading file:', err);
     stopWatching();
@@ -255,6 +257,16 @@ function createMenu() {
           submenu: buildRecentFilesSubmenu()
         },
         { type: 'separator' },
+        {
+          label: 'Save',
+          accelerator: 'CmdOrCtrl+S',
+          click: () => {
+            if (mainWindow) {
+              mainWindow.webContents.send('save-file');
+            }
+          }
+        },
+        { type: 'separator' },
         { role: 'close' }
       ]
     },
@@ -284,6 +296,15 @@ function createMenu() {
           type: 'checkbox',
           checked: darkMode,
           click: () => toggleDarkMode()
+        },
+        {
+          label: isSourceView ? 'View Rendered' : 'View Source',
+          accelerator: 'CmdOrCtrl+U',
+          click: () => {
+            if (mainWindow) {
+              mainWindow.webContents.send('toggle-view-source');
+            }
+          }
         },
         { type: 'separator' },
         { role: 'reload' },
@@ -351,6 +372,30 @@ function createWindow() {
     }
   });
 
+  mainWindow.on('close', (e) => {
+    if (isDirty) {
+      e.preventDefault();
+      const choice = dialog.showMessageBoxSync(mainWindow, {
+        type: 'warning',
+        buttons: ['Save', 'Don\'t Save', 'Cancel'],
+        defaultId: 0,
+        cancelId: 2,
+        title: 'Unsaved Changes',
+        message: 'You have unsaved changes. Do you want to save before closing?'
+      });
+
+      if (choice === 0) {
+        // Save - tell renderer to save, then close
+        mainWindow.webContents.send('save-and-close');
+      } else if (choice === 1) {
+        // Don't Save - force close
+        isDirty = false;
+        mainWindow.close();
+      }
+      // Cancel (choice === 2) - do nothing, window stays open
+    }
+  });
+
   mainWindow.on('closed', () => {
     stopWatching();
     mainWindow = null;
@@ -392,7 +437,7 @@ async function openFile(filePath) {
     // Add to recent files
     addRecentFile(resolvedPath);
 
-    mainWindow.webContents.send('file-opened', { html, fileName, filePath: resolvedPath });
+    mainWindow.webContents.send('file-opened', { html, raw: content, fileName, filePath: resolvedPath });
     mainWindow.setTitle(`${fileName} - Inkwell`);
   } catch (err) {
     console.error('Error reading file:', err);
@@ -504,6 +549,39 @@ ipcMain.handle('clear-recent-files', () => {
   clearRecentFiles();
 });
 
+// Set view mode (for menu label)
+ipcMain.handle('set-view-mode', (event, sourceView) => {
+  isSourceView = sourceView;
+  updateMenu();
+});
+
+// Set dirty state
+ipcMain.handle('set-dirty', (event, dirty) => {
+  isDirty = dirty;
+});
+
+// Parse markdown (for re-rendering edited content)
+ipcMain.handle('parse-markdown', (event, content) => {
+  return parseMarkdown(content);
+});
+
+// Save file
+ipcMain.handle('save-file', async (event, { filePath, content }) => {
+  // Validate extension
+  if (!isAllowedFile(filePath)) {
+    return { error: 'Invalid file type.' };
+  }
+
+  try {
+    const resolvedPath = path.resolve(filePath);
+    await fs.writeFile(resolvedPath, content, 'utf-8');
+    return { success: true };
+  } catch (err) {
+    console.error('Error saving file:', err);
+    return { error: `Could not save file: ${err.message}` };
+  }
+});
+
 // Handle requests from renderer to open files via drag-drop
 ipcMain.handle('open-dropped-file', async (event, filePath) => {
   // Validate extension
@@ -533,7 +611,7 @@ ipcMain.handle('open-dropped-file', async (event, filePath) => {
     addRecentFile(resolvedPath);
 
     mainWindow.setTitle(`${fileName} - Inkwell`);
-    return { html, fileName, filePath: resolvedPath };
+    return { html, raw: content, fileName, filePath: resolvedPath };
   } catch (err) {
     console.error('Error reading dropped file:', err);
     return { error: `Could not open file: ${err.message}` };

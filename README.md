@@ -6,6 +6,7 @@ A beautiful, minimal Markdown viewer for macOS.
 
 - Clean, distraction-free reading experience
 - Dark mode (Cmd+D)
+- Edit source with save (Cmd+U to toggle, Cmd+S to save)
 - Live file watching with auto-reload
 - Find in document (Cmd+F)
 - Recent files menu
@@ -52,6 +53,8 @@ This creates a `.dmg` installer in the `dist/` folder.
 
 - **Open a file**: Use `Cmd+O` or drag a `.md` file onto the window
 - **Find**: Use `Cmd+F` to search within the document
+- **View/Edit source**: Use `Cmd+U` to toggle editable source view
+- **Save**: Use `Cmd+S` to save changes (in source view)
 - **Dark mode**: Use `Cmd+D` to toggle dark mode
 - **Recent files**: File > Open Recent
 - **Zoom**: Use `Cmd++` / `Cmd+-` to adjust text size

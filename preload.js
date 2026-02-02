@@ -47,6 +47,40 @@ contextBridge.exposeInMainWorld('inkwell', {
     });
   },
 
+  onToggleViewSource: (callback) => {
+    ipcRenderer.on('toggle-view-source', () => {
+      callback();
+    });
+  },
+
+  onSaveFile: (callback) => {
+    ipcRenderer.on('save-file', () => {
+      callback();
+    });
+  },
+
+  onSaveAndClose: (callback) => {
+    ipcRenderer.on('save-and-close', () => {
+      callback();
+    });
+  },
+
+  saveFile: async (filePath, content) => {
+    return await ipcRenderer.invoke('save-file', { filePath, content });
+  },
+
+  setViewMode: (isSourceView) => {
+    ipcRenderer.invoke('set-view-mode', isSourceView);
+  },
+
+  setDirty: (dirty) => {
+    ipcRenderer.invoke('set-dirty', dirty);
+  },
+
+  parseMarkdown: async (content) => {
+    return await ipcRenderer.invoke('parse-markdown', content);
+  },
+
   // Get preferences from main process
   getPreferences: () => {
     return ipcRenderer.invoke('get-preferences');
