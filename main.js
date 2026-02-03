@@ -635,7 +635,12 @@ function createMenu() {
     {
       label: 'Edit',
       submenu: [
+        { role: 'undo' },
+        { role: 'redo' },
+        { type: 'separator' },
+        { role: 'cut' },
         { role: 'copy' },
+        { role: 'paste' },
         { role: 'selectAll' },
         { type: 'separator' },
         {
@@ -721,7 +726,7 @@ function createMenu() {
         { type: 'separator' },
         {
           label: 'Zen Mode',
-          accelerator: 'CmdOrCtrl+Shift+Z',
+          accelerator: 'CmdOrCtrl+Shift+D',
           type: 'checkbox',
           checked: zenModeEnabled,
           enabled: hasFile,

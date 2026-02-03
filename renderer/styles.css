@@ -1009,11 +1009,6 @@ body.split-mode #content {
   padding: 80px 20px 60px;
 }
 
-/* Split mode with TOC visible */
-body.split-mode.toc-open #content {
-  margin-left: 250px;
-}
-
 /* Table of Contents Sidebar */
 #toc-sidebar {
   position: fixed;

@@ -389,14 +389,7 @@ function renderSplitView() {
 
         updateStatusBar();
 
-        // Rebuild TOC using requestIdleCallback if available (non-blocking)
-        if (tocVisible) {
-          if (window.requestIdleCallback) {
-            requestIdleCallback(() => buildTocFromSplitPreview(), { timeout: 1000 });
-          } else {
-            buildTocFromSplitPreview();
-          }
-        }
+        // TOC is hidden in split view, no need to rebuild
       } finally {
         isUpdatingPreview = false;
         previewPane.style.opacity = '';
@@ -410,94 +403,10 @@ function renderSplitView() {
   // Setup external links in preview
   setupExternalLinks(previewPane);
 
-  // Build TOC from preview pane in split mode
-  if (tocVisible) {
-    buildTocFromSplitPreview();
-  }
-
   // Render mermaid in initial preview
   renderMermaidInContainer(previewPane);
 
   clearSearch();
-}
-
-// Build TOC from split preview pane
-function buildTocFromSplitPreview() {
-  if (!tocNav) return;
-
-  const previewPane = document.getElementById('split-preview');
-  const markdownBody = previewPane ? previewPane.querySelector('.markdown-body') : null;
-
-  if (!markdownBody) {
-    tocNav.innerHTML = '<ul class="toc-list"><li class="toc-empty">No headings found</li></ul>';
-    return;
-  }
-
-  const headings = markdownBody.querySelectorAll('h1, h2, h3, h4, h5, h6');
-  if (headings.length === 0) {
-    tocNav.innerHTML = '<ul class="toc-list"><li class="toc-empty">No headings found</li></ul>';
-    return;
-  }
-
-  const ul = document.createElement('ul');
-  ul.className = 'toc-list';
-
-  headings.forEach((heading, index) => {
-    if (!heading.id) {
-      heading.id = `heading-${index}`;
-    }
-
-    const li = document.createElement('li');
-    const a = document.createElement('a');
-    a.href = `#${heading.id}`;
-    a.textContent = heading.textContent;
-    a.className = `toc-${heading.tagName.toLowerCase()}`;
-    a.setAttribute('data-heading-id', heading.id);
-
-    a.addEventListener('click', (e) => {
-      e.preventDefault();
-      heading.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      tocNav.querySelectorAll('a').forEach(link => link.classList.remove('active'));
-      a.classList.add('active');
-    });
-
-    li.appendChild(a);
-    ul.appendChild(li);
-  });
-
-  tocNav.innerHTML = '';
-  tocNav.appendChild(ul);
-
-  // Set up scroll spy for preview pane
-  setupScrollSpyForPreview(headings, previewPane);
-}
-
-// Scroll spy for split view preview pane
-function setupScrollSpyForPreview(headings, previewPane) {
-  if (tocObserver) {
-    tocObserver.disconnect();
-  }
-
-  const options = {
-    root: previewPane,
-    rootMargin: '-80px 0px -70% 0px',
-    threshold: 0
-  };
-
-  tocObserver = new IntersectionObserver((entries) => {
-    entries.forEach(entry => {
-      if (entry.isIntersecting) {
-        const id = entry.target.id;
-        tocNav.querySelectorAll('a').forEach(link => {
-          link.classList.toggle('active', link.getAttribute('data-heading-id') === id);
-        });
-      }
-    });
-  }, options);
-
-  headings.forEach(heading => {
-    tocObserver.observe(heading);
-  });
 }
 
 // Set up synchronized scrolling between source and preview
@@ -679,12 +588,12 @@ window.inkwell.onTocVisibilityChanged(({ visible }) => {
 // Update TOC visibility
 function updateTocVisibility() {
   if (tocSidebar) {
-    // Hide TOC only in source mode (not in split view anymore)
-    const shouldHide = !tocVisible || viewMode === 'source';
+    // Hide TOC in source mode and split view
+    const shouldHide = !tocVisible || viewMode === 'source' || viewMode === 'split';
     tocSidebar.classList.toggle('hidden', shouldHide);
   }
-  // Update body class for layout adjustment - now includes split mode
-  document.body.classList.toggle('toc-open', tocVisible && viewMode !== 'source');
+  // Update body class for layout adjustment
+  document.body.classList.toggle('toc-open', tocVisible && viewMode === 'rendered');
 }
 
 // Build Table of Contents from headings
@@ -776,12 +685,8 @@ function toggleToc() {
   tocVisible = !tocVisible;
   window.inkwell.setTocVisible(tocVisible);
   updateTocVisibility();
-  if (tocVisible) {
-    if (viewMode === 'split') {
-      buildTocFromSplitPreview();
-    } else if (viewMode === 'rendered') {
-      buildToc();
-    }
+  if (tocVisible && viewMode === 'rendered') {
+    buildToc();
   }
 }
 
