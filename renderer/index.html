@@ -20,6 +20,29 @@
     </nav>
   </aside>
 
+  <div id="format-toolbar" class="format-toolbar hidden" role="toolbar" aria-label="Formatting toolbar">
+    <button class="format-btn" data-format="bold" title="Bold" aria-label="Bold"><strong>B</strong></button>
+    <button class="format-btn" data-format="italic" title="Italic" aria-label="Italic"><em>I</em></button>
+    <button class="format-btn" data-format="strikethrough" title="Strikethrough" aria-label="Strikethrough"><s>S</s></button>
+    <span class="toolbar-separator" role="separator"></span>
+    <button class="format-btn" data-format="h1" title="Heading 1" aria-label="Heading 1">H1</button>
+    <button class="format-btn" data-format="h2" title="Heading 2" aria-label="Heading 2">H2</button>
+    <button class="format-btn" data-format="h3" title="Heading 3" aria-label="Heading 3">H3</button>
+    <span class="toolbar-separator" role="separator"></span>
+    <button class="format-btn" data-format="link" title="Insert link" aria-label="Insert link">Link</button>
+    <button class="format-btn" data-format="image" title="Insert image" aria-label="Insert image">Img</button>
+    <button class="format-btn" data-format="code" title="Inline code" aria-label="Inline code">`C`</button>
+    <button class="format-btn" data-format="codeblock" title="Code block" aria-label="Code block">```</button>
+    <span class="toolbar-separator" role="separator"></span>
+    <button class="format-btn" data-format="ul" title="Bullet list" aria-label="Bullet list">List</button>
+    <button class="format-btn" data-format="ol" title="Numbered list" aria-label="Numbered list">1.</button>
+    <button class="format-btn" data-format="task" title="Task list" aria-label="Task list">Todo</button>
+    <button class="format-btn" data-format="quote" title="Quote" aria-label="Quote">"</button>
+    <span class="toolbar-separator" role="separator"></span>
+    <button class="format-btn" data-format="hr" title="Horizontal rule" aria-label="Horizontal rule">—</button>
+    <button class="format-btn" data-format="table" title="Table" aria-label="Table">Tbl</button>
+  </div>
+
   <div id="search-bar" class="search-bar hidden">
     <input type="text" id="search-input" placeholder="Find in document..." autocomplete="off" spellcheck="false">
     <span id="search-count" class="search-count"></span>
@@ -67,10 +90,10 @@
           <h3>Edit</h3>
           <div class="shortcut-row"><span class="shortcut-keys">Cmd+Z</span><span>Undo</span></div>
           <div class="shortcut-row"><span class="shortcut-keys">Cmd+Shift+Z</span><span>Redo</span></div>
+          <div class="shortcut-row"><span class="shortcut-keys">Cmd+B</span><span>Bold</span></div>
+          <div class="shortcut-row"><span class="shortcut-keys">Cmd+I</span><span>Italic</span></div>
+          <div class="shortcut-row"><span class="shortcut-keys">Cmd+K</span><span>Link</span></div>
           <div class="shortcut-row"><span class="shortcut-keys">Cmd+F</span><span>Find in document</span></div>
-          <div class="shortcut-row"><span class="shortcut-keys">Enter</span><span>Next match</span></div>
-          <div class="shortcut-row"><span class="shortcut-keys">Shift+Enter</span><span>Previous match</span></div>
-          <div class="shortcut-row"><span class="shortcut-keys">Escape</span><span>Close search</span></div>
         </div>
         <div class="shortcuts-section">
           <h3>View</h3>

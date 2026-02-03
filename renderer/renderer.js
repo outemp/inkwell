@@ -15,6 +15,7 @@ const shortcutsOverlay = document.getElementById('shortcuts-overlay');
 const shortcutsClose = document.getElementById('shortcuts-close');
 const tocSidebar = document.getElementById('toc-sidebar');
 const tocNav = document.getElementById('toc-nav');
+const formatToolbar = document.getElementById('format-toolbar');
 
 // Search state
 let searchMatches = [];
@@ -244,6 +245,234 @@ function updateViewModeClasses() {
   document.body.classList.toggle('source-mode', viewMode === 'source');
 }
 
+// Update format toolbar visibility
+function updateToolbarVisibility() {
+  if (formatToolbar) {
+    const showToolbar = currentFilePath && (viewMode === 'source' || viewMode === 'split');
+    formatToolbar.classList.toggle('hidden', !showToolbar);
+  }
+}
+
+// Format toolbar functionality
+function setupFormatToolbar() {
+  if (!formatToolbar) return;
+
+  formatToolbar.addEventListener('click', (e) => {
+    const btn = e.target.closest('.format-btn');
+    if (!btn) return;
+
+    const format = btn.dataset.format;
+    const editor = document.getElementById('source-editor');
+    if (!editor) return;
+
+    applyFormat(editor, format);
+    editor.focus();
+  });
+}
+
+// Apply markdown formatting to selected text
+function applyFormat(editor, format) {
+  const start = editor.selectionStart;
+  const end = editor.selectionEnd;
+  const text = editor.value;
+  const selectedText = text.substring(start, end);
+  const beforeText = text.substring(0, start);
+  const afterText = text.substring(end);
+
+  let newText = '';
+  let selectStart = start;
+  let selectEnd = end;
+
+  // Line-start formats (headings, lists, quotes, etc.)
+  const lineStartFormats = ['h1', 'h2', 'h3', 'ul', 'ol', 'task', 'quote', 'hr', 'codeblock', 'table'];
+
+  if (lineStartFormats.includes(format)) {
+    const result = applyLineStartFormat(format, beforeText, selectedText, afterText, start);
+    newText = result.text;
+    selectStart = result.selectStart;
+    selectEnd = result.selectEnd;
+  } else {
+    // Inline formats (bold, italic, code, link, image)
+    const result = applyInlineFormat(format, beforeText, selectedText, afterText, start);
+    newText = result.text;
+    selectStart = result.selectStart;
+    selectEnd = result.selectEnd;
+  }
+
+  editor.value = newText;
+  editor.setSelectionRange(selectStart, selectEnd);
+
+  // Trigger input event for live preview and dirty state
+  editor.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+// Apply inline formatting (bold, italic, code, link, image, strikethrough)
+function applyInlineFormat(format, beforeText, selectedText, afterText, start) {
+  let replacement = '';
+  let selectStart = start;
+  let selectEnd = start;
+
+  switch (format) {
+    case 'bold':
+      replacement = `**${selectedText || 'bold text'}**`;
+      if (!selectedText) { selectStart = start + 2; selectEnd = start + 11; }
+      else { selectStart = start; selectEnd = start + replacement.length; }
+      break;
+
+    case 'italic':
+      replacement = `*${selectedText || 'italic text'}*`;
+      if (!selectedText) { selectStart = start + 1; selectEnd = start + 12; }
+      else { selectStart = start; selectEnd = start + replacement.length; }
+      break;
+
+    case 'strikethrough':
+      replacement = `~~${selectedText || 'strikethrough'}~~`;
+      if (!selectedText) { selectStart = start + 2; selectEnd = start + 15; }
+      else { selectStart = start; selectEnd = start + replacement.length; }
+      break;
+
+    case 'link':
+      if (selectedText) {
+        replacement = `[${selectedText}](url)`;
+        selectStart = start + selectedText.length + 3;
+        selectEnd = selectStart + 3;
+      } else {
+        replacement = '[link text](url)';
+        selectStart = start + 1;
+        selectEnd = start + 10;
+      }
+      break;
+
+    case 'image':
+      replacement = `![${selectedText || 'alt text'}](image-url)`;
+      if (!selectedText) { selectStart = start + 2; selectEnd = start + 10; }
+      else { selectStart = start + selectedText.length + 4; selectEnd = selectStart + 9; }
+      break;
+
+    case 'code':
+      replacement = `\`${selectedText || 'code'}\``;
+      if (!selectedText) { selectStart = start + 1; selectEnd = start + 5; }
+      else { selectStart = start; selectEnd = start + replacement.length; }
+      break;
+
+    default:
+      replacement = selectedText;
+      selectEnd = start + replacement.length;
+  }
+
+  return {
+    text: beforeText + replacement + afterText,
+    selectStart,
+    selectEnd
+  };
+}
+
+// Apply line-start formatting (headings, lists, quotes, hr, codeblock, table)
+function applyLineStartFormat(format, beforeText, selectedText, afterText, start) {
+  // Find the start of the current line
+  const lineStart = beforeText.lastIndexOf('\n') + 1;
+  const textBeforeLine = beforeText.substring(0, lineStart);
+  const textOnLineBeforeCursor = beforeText.substring(lineStart);
+
+  // Check if we need a newline before the format
+  const needsNewlineBefore = textBeforeLine.length > 0 && !textBeforeLine.endsWith('\n\n') && !textBeforeLine.endsWith('\n');
+  const prefix = needsNewlineBefore ? '\n' : '';
+
+  let replacement = '';
+  let selectStart = 0;
+  let selectEnd = 0;
+
+  // For multi-line selections, apply prefix to each line for list/quote formats
+  const lines = selectedText.split('\n');
+  const isMultiLine = lines.length > 1;
+
+  switch (format) {
+    case 'h1':
+      replacement = `# ${selectedText || 'Heading 1'}`;
+      break;
+    case 'h2':
+      replacement = `## ${selectedText || 'Heading 2'}`;
+      break;
+    case 'h3':
+      replacement = `### ${selectedText || 'Heading 3'}`;
+      break;
+    case 'ul':
+      if (isMultiLine) {
+        replacement = lines.map(line => `- ${line}`).join('\n');
+      } else {
+        replacement = `- ${selectedText || 'list item'}`;
+      }
+      break;
+    case 'ol':
+      if (isMultiLine) {
+        replacement = lines.map((line, i) => `${i + 1}. ${line}`).join('\n');
+      } else {
+        replacement = `1. ${selectedText || 'list item'}`;
+      }
+      break;
+    case 'task':
+      if (isMultiLine) {
+        replacement = lines.map(line => `- [ ] ${line}`).join('\n');
+      } else {
+        replacement = `- [ ] ${selectedText || 'task'}`;
+      }
+      break;
+    case 'quote':
+      if (isMultiLine) {
+        replacement = lines.map(line => `> ${line}`).join('\n');
+      } else {
+        replacement = `> ${selectedText || 'quote'}`;
+      }
+      break;
+    case 'hr':
+      replacement = '---';
+      break;
+    case 'codeblock':
+      replacement = '```\n' + (selectedText || 'code') + '\n```';
+      break;
+    case 'table':
+      replacement = '| Column 1 | Column 2 | Column 3 |\n| -------- | -------- | -------- |\n| Cell 1   | Cell 2   | Cell 3   |';
+      break;
+  }
+
+  // Build the new text
+  const newBeforeText = textBeforeLine + prefix;
+  const newText = newBeforeText + replacement + afterText;
+
+  // Calculate selection positions
+  const baseOffset = newBeforeText.length;
+
+  if (!selectedText) {
+    // Position cursor to select placeholder text
+    switch (format) {
+      case 'h1': selectStart = baseOffset + 2; selectEnd = baseOffset + 11; break;
+      case 'h2': selectStart = baseOffset + 3; selectEnd = baseOffset + 12; break;
+      case 'h3': selectStart = baseOffset + 4; selectEnd = baseOffset + 13; break;
+      case 'ul': selectStart = baseOffset + 2; selectEnd = baseOffset + 11; break;
+      case 'ol': selectStart = baseOffset + 3; selectEnd = baseOffset + 12; break;
+      case 'task': selectStart = baseOffset + 6; selectEnd = baseOffset + 10; break;
+      case 'quote': selectStart = baseOffset + 2; selectEnd = baseOffset + 7; break;
+      case 'hr': selectStart = baseOffset + 3; selectEnd = baseOffset + 3; break;
+      case 'codeblock': selectStart = baseOffset + 4; selectEnd = baseOffset + 8; break;
+      case 'table': selectStart = baseOffset + 2; selectEnd = baseOffset + 10; break;
+      default: selectStart = baseOffset; selectEnd = baseOffset + replacement.length;
+    }
+  } else {
+    // Select the formatted text
+    selectStart = baseOffset;
+    selectEnd = baseOffset + replacement.length;
+  }
+
+  return {
+    text: newText,
+    selectStart,
+    selectEnd
+  };
+}
+
+// Initialize format toolbar
+setupFormatToolbar();
+
 // Render current view based on mode
 function renderCurrentView() {
   // Clean up divider handlers when leaving split view
@@ -252,6 +481,7 @@ function renderCurrentView() {
   }
 
   updateViewModeClasses();
+  updateToolbarVisibility();
   if (viewMode === 'source') {
     renderSource(currentRaw);
   } else if (viewMode === 'split') {
@@ -727,6 +957,7 @@ window.inkwell.onFileOpened(({ html, raw, fileName, filePath }) => {
   window.inkwell.setViewMode('rendered');
   renderMarkdown(html);
   updateStatusBar();
+  updateToolbarVisibility();
 });
 
 // Listen for file changed (live reload)
@@ -1346,6 +1577,15 @@ window.inkwell.onToggleZenMode(() => {
 // Listen for toggle-sync-scroll from main process
 window.inkwell.onToggleSyncScroll(() => {
   syncScrollEnabled = !syncScrollEnabled;
+});
+
+// Listen for format commands from main process (keyboard shortcuts)
+window.inkwell.onFormat((format) => {
+  const editor = document.getElementById('source-editor');
+  if (editor && (viewMode === 'source' || viewMode === 'split')) {
+    applyFormat(editor, format);
+    editor.focus();
+  }
 });
 
 // Initialize theme on load

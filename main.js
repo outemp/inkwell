@@ -651,6 +651,40 @@ function createMenu() {
               mainWindow.webContents.send('toggle-find');
             }
           }
+        },
+        { type: 'separator' },
+        {
+          label: 'Format',
+          submenu: [
+            {
+              label: 'Bold',
+              accelerator: 'CmdOrCtrl+B',
+              click: () => {
+                if (mainWindow) mainWindow.webContents.send('format', 'bold');
+              }
+            },
+            {
+              label: 'Italic',
+              accelerator: 'CmdOrCtrl+I',
+              click: () => {
+                if (mainWindow) mainWindow.webContents.send('format', 'italic');
+              }
+            },
+            {
+              label: 'Link',
+              accelerator: 'CmdOrCtrl+K',
+              click: () => {
+                if (mainWindow) mainWindow.webContents.send('format', 'link');
+              }
+            },
+            {
+              label: 'Code',
+              accelerator: 'CmdOrCtrl+Shift+C',
+              click: () => {
+                if (mainWindow) mainWindow.webContents.send('format', 'code');
+              }
+            }
+          ]
         }
       ]
     },

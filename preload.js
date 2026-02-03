@@ -59,6 +59,12 @@ contextBridge.exposeInMainWorld('inkwell', {
     });
   },
 
+  onFormat: (callback) => {
+    ipcRenderer.on('format', (event, format) => {
+      callback(format);
+    });
+  },
+
   onFileChanged: (callback) => {
     ipcRenderer.on('file-changed', (event, data) => {
       callback(data);

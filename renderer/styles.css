@@ -122,6 +122,71 @@ body {
   z-index: 1000;
 }
 
+/* Format toolbar */
+.format-toolbar {
+  position: fixed;
+  top: 38px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 4px 8px;
+  z-index: 1003;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  -webkit-app-region: no-drag;
+}
+
+.format-toolbar.hidden {
+  display: none;
+}
+
+.format-btn {
+  background: none;
+  border: 1px solid transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  line-height: 1.2;
+  min-width: 28px;
+  transition: all 0.15s ease;
+}
+
+.format-btn:hover {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+.format-btn:focus {
+  outline: none;
+}
+
+.format-btn:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 1px;
+}
+
+.format-btn:active {
+  background: var(--accent-color);
+  color: white;
+}
+
+.toolbar-separator {
+  width: 1px;
+  height: 20px;
+  background: var(--border-color);
+  margin: 0 4px;
+}
+
+body.toc-open .format-toolbar {
+  left: calc(50% + 125px);
+}
+
 /* Search bar */
 .search-bar {
   position: fixed;
@@ -138,6 +203,12 @@ body {
   z-index: 1002;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
   -webkit-app-region: no-drag;
+}
+
+/* Move search bar below toolbar when toolbar is visible */
+body.source-mode .search-bar,
+body.split-mode .search-bar {
+  top: 80px;
 }
 
 .search-bar.hidden {
